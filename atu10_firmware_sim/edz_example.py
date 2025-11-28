@@ -102,34 +102,70 @@ def solve_shunt_then_series(
     return {"sw": 1, "L": L, "C": C}
 
 
-def _logspace(start_exp: float, stop_exp: float, num: int) -> list[float]:
-    step = (stop_exp - start_exp) / (num - 1)
-    return [10 ** (start_exp + i * step) for i in range(num)]
-
-
 def find_ideal_match(freq_hz: float, z_load: complex, z0: float) -> dict:
     """
-    Scan continuous L/C values (both topologies) to find a near-1:1 solution.
+    Analytic L-network match (both topologies), unconstrained by relay steps.
     """
-    l_values = _logspace(-9, -3, 60)  # 1 nH .. 1 mH
-    c_values = _logspace(-13, -8, 60)  # ~0.05 pF .. 10 nF
+    R = z_load.real
+    X = z_load.imag
+    w = 2 * math.pi * freq_hz
+    candidates: list[dict] = []
 
-    best: dict | None = None
-    best_swr = 999
-
-    for sw in (0, 1):
-        for L in l_values:
-            for C in c_values:
-                z_in = continuous_input_impedance(freq_hz, z_load, L, C, sw)
+    # Topology sw=0: series L then shunt C
+    if R > 0 and R <= z0:
+        term = (R * z0) - (R * R)
+        if term >= 0:
+            for sign in (1.0, -1.0):
+                Xs = -X + sign * math.sqrt(term)
+                X_tot = X + Xs
+                denom = (R * R) + (X_tot * X_tot)
+                if denom == 0:
+                    continue
+                Bc = X_tot / denom
+                if Bc <= 0:
+                    continue
+                L = Xs / w
+                C = Bc / w
+                if L < 0 or C < 0:
+                    continue
+                z_in = continuous_input_impedance(freq_hz, z_load, L, C, 0)
                 swr = swr_from_z(z_in, z0)
-                if swr < best_swr:
-                    best_swr = swr
-                    best = {"sw": sw, "L": L, "C": C, "z_in": z_in, "swr": swr}
-                    if swr == 100:
-                        return best
+                candidates.append({"sw": 0, "L": L, "C": C, "z_in": z_in, "swr": swr})
 
-    assert best is not None
-    return best
+    # Topology sw=1: shunt C then series L
+    denom_base = (R * R) + (X * X)
+    if denom_base > 0:
+        G = R / denom_base
+        B_load = -X / denom_base
+        if 0 < G < (1.0 / z0):
+            numerator = G - (z0 * G * G)
+            if numerator >= 0:
+                Btot = math.sqrt(numerator / z0)
+                for sign in (1.0, -1.0):
+                    Bc = sign * Btot - B_load
+                    if Bc <= 0:
+                        continue
+                    y_total = complex(G, B_load + Bc)
+                    if y_total == 0:
+                        continue
+                    z_t = 1.0 / y_total
+                    Xs = -z_t.imag
+                    L = Xs / w
+                    C = Bc / w
+                    if L < 0 or C < 0:
+                        continue
+                    z_in = z_t + 1j * Xs
+                    swr = swr_from_z(z_in, z0)
+                    candidates.append(
+                        {"sw": 1, "L": L, "C": C, "z_in": z_in, "swr": swr}
+                    )
+
+    if not candidates:
+        # Fallback: return high SWR but with zero components
+        z_in = z_load
+        return {"sw": 0, "L": 0.0, "C": 0.0, "z_in": z_in, "swr": swr_from_z(z_in, z0)}
+
+    return min(candidates, key=lambda c: c["swr"])
 
 
 def run_table(table, title: str) -> None:
