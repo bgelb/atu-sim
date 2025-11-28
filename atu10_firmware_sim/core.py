@@ -12,14 +12,12 @@ class SimFlags:
     Optional knobs to experiment with algorithm tweaks while keeping defaults
     faithful to the firmware when unset.
 
-    force_alt_strats_threshold:
-        If set (SWR*100 units), run coarse strategies 2 and 3 even when the
-        cap/ind gating would skip them, but only when the best SWR from
-        strategy 1 is >= this threshold. Leave as None for firmware-faithful
-        behavior.
+    force_all_coarse_strategies:
+        If True, always run coarse strategies 2 and 3 regardless of the
+        cap/ind gate. Leave False for firmware-faithful behavior.
     """
 
-    force_alt_strats_threshold: int | None = None
+    force_all_coarse_strategies: bool = False
 
 
 @dataclass
@@ -255,7 +253,7 @@ class TunerSim:
         cap_mem1 = self.cap
 
         allow_alt = self.cap <= 2 and self.ind <= 2
-        if self.flags.force_alt_strats_threshold is not None and SWR_mem1 >= self.flags.force_alt_strats_threshold:
+        if self.flags.force_all_coarse_strategies:
             allow_alt = True
 
         if allow_alt:
