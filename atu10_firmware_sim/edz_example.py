@@ -178,9 +178,9 @@ def run_table(table, title: str) -> None:
     algo_width = 64
     print(
         f"{'Freq':>14} | {'Z_load (R+jX)':>22} | "
-        f"{'Ideal (L/C, Zin, SWR)':<{ideal_width}}| "
-        f"{'Best discrete (L/C, Zin, SWR)':<{best_width}}| "
-        f"{'Tune algo (L/C, Zin, SWR)':<{algo_width}}"
+        f"{'Ideal (L/C, topology, Zin, SWR)':<{ideal_width}}| "
+        f"{'Best discrete (L/C, topology, Zin, SWR)':<{best_width}}| "
+        f"{'Tune algo (L/C, topology, Zin, SWR)':<{algo_width}}"
     )
     print("-" * (14 + 3 + 22 + 3 + ideal_width + 2 + best_width + 2 + algo_width))
 
@@ -197,6 +197,7 @@ def run_table(table, title: str) -> None:
         ideal_str = (
             f"L={ideal['L']*1e6:7.3f}u "
             f"C={ideal['C']*1e12:8.1f}p "
+            f"SW={ideal['sw']} "
             f"Zin={z_ideal.real:8.2f}+j{z_ideal.imag:8.2f} "
             f"SWR={fmt_swr(ideal['swr']):>6}"
         )
@@ -208,6 +209,7 @@ def run_table(table, title: str) -> None:
         best_str = (
             f"L={bank.l_from_bits(best_state[0])*1e6:7.3f}u "
             f"C={bank.c_from_bits(best_state[1])*1e12:8.1f}p "
+            f"SW={best_state[2]} "
             f"Zin={z_best.real:8.2f}+j{z_best.imag:8.2f} "
             f"SWR={fmt_swr(best_swr):>6}"
         )
@@ -216,6 +218,7 @@ def run_table(table, title: str) -> None:
         algo_str = (
             f"L={bank.l_from_bits(sim.ind)*1e6:7.3f}u "
             f"C={bank.c_from_bits(sim.cap)*1e12:8.1f}p "
+            f"SW={sim.SW} "
             f"Zin={z_alg.real:8.2f}+j{z_alg.imag:8.2f} "
             f"SWR={fmt_swr(sim.SWR):>6}"
         )
