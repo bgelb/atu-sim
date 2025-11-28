@@ -112,15 +112,12 @@ def swr_from_z(z_in: complex, z0: float = Z0_DEFAULT) -> int:
 
     gamma = (z_in - z0) / (z_in + z0)
     mag = abs(gamma)
-    if mag >= 0.999:
-        return 999
+    if mag >= 0.999999:
+        return 9999
 
     s = (1.0 + mag) / (1.0 - mag)
-    if s > 9.985:
-        return 999
-
     swr_int = int(s * 100.0 + 0.5)
-    return max(swr_int, 100)
+    return max(min(swr_int, 9999), 100)
 
 
 @dataclass
