@@ -168,16 +168,18 @@ def run_table(table, title: str) -> None:
     print("=" * 70)
     print(title)
     print("=" * 70)
-    ideal_width = 84
-    best_width = 84
-    algo_width = 84
+    freq_width = max(len("Freq"), max(len(label) for label, _, _ in table))
+    load_width = 18
+    ideal_width = 88
+    best_width = 88
+    algo_width = 88
     print(
-        f"{'Freq':>14} | {'Z_load (R+jX)':>22} | "
+        f"{'Freq':>{freq_width}} | {'Z_load (R+jX)':>{load_width}} | "
         f"{'Ideal (L/C, topology, Zin, SWR)':<{ideal_width}}| "
         f"{'Best discrete (L/C, topology, Zin, SWR)':<{best_width}}| "
         f"{'Tune algo (L/C, topology, Zin, SWR)':<{algo_width}}"
     )
-    print("-" * (14 + 3 + 22 + 3 + ideal_width + 2 + best_width + 2 + algo_width))
+    print("-" * (freq_width + 3 + load_width + 3 + ideal_width + 2 + best_width + 2 + algo_width))
 
     for label, freq, zL in table:
         sim = TunerSim(freq_hz=freq, z_load=zL)
@@ -225,9 +227,10 @@ def run_table(table, title: str) -> None:
         )
 
         sign = "+" if zL.imag >= 0 else "-"
+        load_str = f"{zL.real:7.0f} {sign} j{abs(zL.imag):5.0f}"
         print(
-            f"{label:>14} | "
-            f"{zL.real:6.0f} {sign} j{abs(zL.imag):4.0f} | "
+            f"{label:>{freq_width}} | "
+            f"{load_str:>{load_width}} | "
             f"{ideal_str:<{ideal_width}}| "
             f"{best_str:<{best_width}}| "
             f"{algo_str:<{algo_width}}"
