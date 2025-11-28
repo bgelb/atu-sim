@@ -7,6 +7,22 @@ Z0_DEFAULT = 50.0
 
 
 @dataclass
+class SimFlags:
+    """
+    Optional knobs to experiment with algorithm tweaks while keeping defaults
+    faithful to the firmware when unset.
+
+    force_alt_strats_threshold:
+        If set (SWR*100 units), run coarse strategies 2 and 3 even when the
+        cap/ind gating would skip them, but only when the best SWR from
+        strategy 1 is >= this threshold. Leave as None for firmware-faithful
+        behavior.
+    """
+
+    force_alt_strats_threshold: int | None = None
+
+
+@dataclass
 class LCBank:
     l_values: tuple[float, ...] = (
         0.10e-6,
@@ -129,6 +145,7 @@ class TunerSim:
     z_load: complex
     bank: LCBank = field(default_factory=LCBank)
     z0: float = Z0_DEFAULT
+    flags: SimFlags = field(default_factory=SimFlags)
 
     ind: int = 0
     cap: int = 0
@@ -237,7 +254,11 @@ class TunerSim:
         ind_mem1 = self.ind
         cap_mem1 = self.cap
 
-        if self.cap <= 2 and self.ind <= 2:
+        allow_alt = self.cap <= 2 and self.ind <= 2
+        if self.flags.force_alt_strats_threshold is not None and SWR_mem1 >= self.flags.force_alt_strats_threshold:
+            allow_alt = True
+
+        if allow_alt:
             self.ind = 0
             self.cap = 0
             self.relay_set()
@@ -250,7 +271,7 @@ class TunerSim:
             ind_mem2 = self.ind
             cap_mem2 = self.cap
 
-        if self.cap <= 2 and self.ind <= 2:
+        if allow_alt:
             self.ind = 0
             self.cap = 0
             self.relay_set()

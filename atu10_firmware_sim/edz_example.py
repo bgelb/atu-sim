@@ -185,6 +185,8 @@ def run_table(table, title: str) -> None:
         sim = TunerSim(freq_hz=freq, z_load=zL)
         sim.atu_reset()
 
+        verbose_coarse = "7.0 MHz (70 ft)" in label
+
         best_swr, best_state = brute_force_best(freq, zL)
         sim.tune()
         bank: LCBank = sim.bank
@@ -232,6 +234,136 @@ def run_table(table, title: str) -> None:
             f"{best_str:<{best_width}}| "
             f"{algo_str:<{algo_width}}"
         )
+
+        if verbose_coarse:
+            def coarse_debug(sw_val: int) -> None:
+                print(f"    Coarse sweep debug (reset, {'shunt@load' if sw_val==0 else 'shunt@input'}):")
+                sim_dbg = TunerSim(freq_hz=freq, z_load=zL)
+                sim_dbg.atu_reset()
+                sim_dbg.SW = sw_val
+                sim_dbg.relay_set()
+                print(f"      start: SWR={fmt_swr(sim_dbg.SWR)} ind={sim_dbg.ind:3d} cap={sim_dbg.cap:3d}")
+
+                def strat_label(n: int) -> None:
+                    print(f"      Strategy {n}:")
+
+                # Strategy 1: coarse_cap then coarse_ind
+                strat_label(1)
+                sim_dbg.cap = 0
+                sim_dbg.ind = 0
+                sim_dbg.relay_set()
+                # coarse_cap
+                sim_dbg.get_swr()
+                swr_mem = sim_dbg.SWR // 10
+                cap_mem = 0
+                cap = 1
+                while cap < 64:
+                    sim_dbg.relay_set(cap=cap)
+                    swr_scaled = sim_dbg.SWR // 10
+                    print(f"        cap step: cap={cap:3d} SWR={fmt_swr(sim_dbg.SWR)} scaled={swr_scaled}")
+                    if swr_scaled <= swr_mem:
+                        cap_mem = cap
+                        swr_mem = swr_scaled
+                        cap *= 2
+                    else:
+                        break
+                sim_dbg.cap = cap_mem
+                sim_dbg.relay_set()
+                print(f"        coarse_cap chosen cap={sim_dbg.cap:3d} SWR={fmt_swr(sim_dbg.SWR)}")
+
+                # coarse_ind
+                sim_dbg.get_swr()
+                swr_mem = sim_dbg.SWR // 10
+                ind_mem = 0
+                ind = 1
+                while ind < 64:
+                    sim_dbg.relay_set(ind=ind)
+                    swr_scaled = sim_dbg.SWR // 10
+                    print(f"        ind step: ind={ind:3d} SWR={fmt_swr(sim_dbg.SWR)} scaled={swr_scaled}")
+                    if swr_scaled <= swr_mem:
+                        ind_mem = ind
+                        swr_mem = swr_scaled
+                        ind *= 2
+                    else:
+                        break
+                sim_dbg.ind = ind_mem
+                sim_dbg.relay_set()
+                print(f"        coarse_ind chosen ind={sim_dbg.ind:3d} SWR={fmt_swr(sim_dbg.SWR)}")
+
+                # Strategy 2: coarse_ind then coarse_cap (only if cap<=2 and ind<=2)
+                if sim_dbg.cap <= 2 and sim_dbg.ind <= 2:
+                    strat_label(2)
+                    sim_dbg.cap = 0
+                    sim_dbg.ind = 0
+                    sim_dbg.relay_set()
+                    # coarse_ind
+                    sim_dbg.get_swr()
+                    swr_mem = sim_dbg.SWR // 10
+                    ind_mem = 0
+                    ind = 1
+                    while ind < 64:
+                        sim_dbg.relay_set(ind=ind)
+                        swr_scaled = sim_dbg.SWR // 10
+                        print(f"        ind step: ind={ind:3d} SWR={fmt_swr(sim_dbg.SWR)} scaled={swr_scaled}")
+                        if swr_scaled <= swr_mem:
+                            ind_mem = ind
+                            swr_mem = swr_scaled
+                            ind *= 2
+                        else:
+                            break
+                    sim_dbg.ind = ind_mem
+                    sim_dbg.relay_set()
+                    print(f"        coarse_ind chosen ind={sim_dbg.ind:3d} SWR={fmt_swr(sim_dbg.SWR)}")
+                    # coarse_cap
+                    sim_dbg.get_swr()
+                    swr_mem = sim_dbg.SWR // 10
+                    cap_mem = 0
+                    cap = 1
+                    while cap < 64:
+                        sim_dbg.relay_set(cap=cap)
+                        swr_scaled = sim_dbg.SWR // 10
+                        print(f"        cap step: cap={cap:3d} SWR={fmt_swr(sim_dbg.SWR)} scaled={swr_scaled}")
+                        if swr_scaled <= swr_mem:
+                            cap_mem = cap
+                            swr_mem = swr_scaled
+                            cap *= 2
+                        else:
+                            break
+                    sim_dbg.cap = cap_mem
+                    sim_dbg.relay_set()
+                    print(f"        coarse_cap chosen cap={sim_dbg.cap:3d} SWR={fmt_swr(sim_dbg.SWR)}")
+                else:
+                    print("      Strategy 2 skipped (cap>2 or ind>2 after Strategy 1)")
+
+                # Strategy 3: coarse_ind_cap (only if cap<=2 and ind<=2)
+                if sim_dbg.cap <= 2 and sim_dbg.ind <= 2:
+                    strat_label(3)
+                    sim_dbg.cap = 0
+                    sim_dbg.ind = 0
+                    sim_dbg.relay_set()
+                    sim_dbg.get_swr()
+                    swr_mem = sim_dbg.SWR // 10
+                    ind_mem = 0
+                    ind = 1
+                    while ind < 64:
+                        sim_dbg.relay_set(ind=ind, cap=ind)
+                        swr_scaled = sim_dbg.SWR // 10
+                        print(f"        ind=cap step: val={ind:3d} SWR={fmt_swr(sim_dbg.SWR)} scaled={swr_scaled}")
+                        if swr_scaled <= swr_mem:
+                            ind_mem = ind
+                            swr_mem = swr_scaled
+                            ind *= 2
+                        else:
+                            break
+                    sim_dbg.ind = ind_mem
+                    sim_dbg.cap = ind_mem
+                    sim_dbg.relay_set()
+                    print(f"        coarse_ind_cap chosen ind=cap={sim_dbg.ind:3d} SWR={fmt_swr(sim_dbg.SWR)}")
+                else:
+                    print("      Strategy 3 skipped (cap>2 or ind>2 after Strategy 1)")
+
+            coarse_debug(0)
+            coarse_debug(1)
 
 
 def main() -> None:
