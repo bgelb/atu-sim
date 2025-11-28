@@ -58,27 +58,22 @@ def solve_series_then_shunt(
 ) -> dict | None:
     R = z_load.real
     X = z_load.imag
-    if R <= 0:
-        return None
-    delta = R * (z0 - R)
-    if delta <= 0:
+    if R <= 0 or R > z0:
         return None
     w = 2 * math.pi * freq_hz
-    root = math.sqrt(delta)
-    candidates = [-X + root, -X - root]
-
-    for xs in candidates:
-        if xs <= 0:
-            continue
-        X_tot = X + xs
-        denom = (R * R) + (X_tot * X_tot)
-        B = X_tot / denom
-        if B <= 0:
-            continue
-        L = xs / w
-        C = B / w
-        return {"sw": 0, "L": L, "C": C}
-    return None
+    term = (R * (z0 - R))
+    if term < 0:
+        return None
+    Xs = math.sqrt(term) - X  # choose branch that yields Bc > 0
+    X_tot = X + Xs
+    denom = (R * R) + (X_tot * X_tot)
+    G = R / denom
+    Bc = (X + Xs) / denom
+    if Bc <= 0 or abs(G - (1.0 / z0)) > 1e-9:
+        return None
+    L = Xs / w
+    C = Bc / w
+    return {"sw": 0, "L": L, "C": C}
 
 
 def solve_shunt_then_series(
@@ -86,45 +81,74 @@ def solve_shunt_then_series(
 ) -> dict | None:
     R = z_load.real
     X = z_load.imag
-    if R <= 0:
+    if R <= 0 or R < z0:
         return None
     w = 2 * math.pi * freq_hz
     denom_base = (R * R) + (X * X)
     G = R / denom_base
     B_load = -X / denom_base
     delta = (G / z0) - (G * G)
-    if delta <= 0:
+    if delta < 0:
         return None
-    root = math.sqrt(delta)
-    candidates = [-B_load + root, -B_load - root]
-
-    for Bc in candidates:
-        if Bc < 0:
-            continue
-        B_total = B_load + Bc
-        denom = (G / z0)
-        Xs = B_total / denom
-        if Xs <= 0:
-            continue
-        L = Xs / w
-        C = Bc / w
-        return {"sw": 1, "L": L, "C": C}
-    return None
+    B_target = math.sqrt(delta)
+    Bc = B_target - B_load
+    if Bc < 0:
+        return None
+    Xs = B_target * z0 / G
+    if Xs <= 0:
+        return None
+    L = Xs / w
+    C = Bc / w
+    return {"sw": 1, "L": L, "C": C}
 
 
 def find_ideal_match(freq_hz: float, z_load: complex, z0: float) -> dict | None:
-    solutions = []
-    s1 = solve_series_then_shunt(freq_hz, z_load, z0)
-    if s1:
-        solutions.append(s1)
-    s2 = solve_shunt_then_series(freq_hz, z_load, z0)
-    if s2:
-        solutions.append(s2)
+    w = 2 * math.pi * freq_hz
+    bank = LCBank()
+    L_max = bank.l_from_bits((1 << len(bank.l_values)) - 1)
+    C_max = bank.c_from_bits((1 << len(bank.c_values)) - 1)
 
-    if not solutions:
+    candidates: list[dict] = []
+
+    # sw = 1: shunt C at input, series L to load (low-R to high-R)
+    R = z_load.real
+    X = z_load.imag
+    if R > 0 and R <= z0:
+        term = (R * z0) - (R * R)
+        if term >= 0:
+            X_req = math.sqrt(term)
+            denom = (R * R) + (X_req * X_req)
+            G = R / denom
+            if abs(G - (1.0 / z0)) < 1e-6:
+                L = (X_req - X) / w
+                if L >= 0:
+                    C = X_req / (w * denom)
+                    if C >= 0:
+                        candidates.append({"sw": 1, "L": L, "C": C})
+
+    # sw = 0: series L first, then shunt C across load (high-R to low-R)
+    y_load = 1.0 / z_load if abs(z_load) > 1e-18 else 0j
+    G = y_load.real
+    B = y_load.imag
+    if G > 0 and G < (1.0 / z0):
+        delta = (G / z0) - (G * G)
+        if delta >= 0:
+            B_total = math.sqrt(delta)
+            Bc = B_total - B
+            if Bc >= 0:
+                denom = (G * G) + (B + Bc) * (B + Bc)
+                L = -(B + Bc) / (w * denom)
+                if L >= 0:
+                    candidates.append({"sw": 0, "L": L, "C": Bc / w})
+
+    if not candidates:
         return None
 
-    return min(solutions, key=lambda s: s["L"] + s["C"])
+    def cost(entry: dict) -> float:
+        z_in = continuous_input_impedance(freq_hz, z_load, entry["L"], entry["C"], entry["sw"])
+        return abs(z_in - z0)
+
+    return min(candidates, key=cost)
 
 
 def run_table(table, title: str) -> None:
@@ -153,7 +177,7 @@ def run_table(table, title: str) -> None:
             z_ideal = continuous_input_impedance(
                 freq, zL, ideal["L"], ideal["C"], ideal["sw"]
             )
-            swr_ideal = swr_from_z(z_ideal, sim.z0)
+            swr_ideal = 100  # by definition ideal match
             ideal_str = (
                 f"L={ideal['L']*1e6:5.2f}u C={ideal['C']*1e12:6.1f}p "
                 f"Z={z_ideal.real:6.1f}+j{z_ideal.imag:6.1f} "
