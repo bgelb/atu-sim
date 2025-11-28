@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 
-from .core import LCBank, TunerSim, brute_force_best, l_network_input_impedance, swr_from_z
+from .core import LCBank, SimFlags, TunerSim, brute_force_best, l_network_input_impedance, swr_from_z
 
 
 TABLE1 = [
@@ -182,7 +182,7 @@ def run_table(table, title: str) -> None:
     print("-" * (freq_width + 3 + load_width + 3 + ideal_width + 2 + best_width + 2 + algo_width))
 
     for label, freq, zL in table:
-        sim = TunerSim(freq_hz=freq, z_load=zL)
+        sim = TunerSim(freq_hz=freq, z_load=zL, flags=SimFlags(force_all_coarse_strategies=True))
         sim.atu_reset()
 
         verbose_coarse = "7.0 MHz (70 ft)" in label
@@ -238,7 +238,11 @@ def run_table(table, title: str) -> None:
         if verbose_coarse:
             def coarse_debug(sw_val: int) -> None:
                 print(f"    Coarse sweep debug (reset, {'shunt@load' if sw_val==0 else 'shunt@input'}):")
-                sim_dbg = TunerSim(freq_hz=freq, z_load=zL)
+                sim_dbg = TunerSim(
+                    freq_hz=freq,
+                    z_load=zL,
+                    flags=SimFlags(force_all_coarse_strategies=True),
+                )
                 sim_dbg.atu_reset()
                 sim_dbg.SW = sw_val
                 sim_dbg.relay_set()
@@ -246,6 +250,8 @@ def run_table(table, title: str) -> None:
 
                 def strat_label(n: int) -> None:
                     print(f"      Strategy {n}:")
+
+                best_after_strat1 = best_after_strat2 = best_after_strat3 = None
 
                 # Strategy 1: coarse_cap then coarse_ind
                 strat_label(1)
@@ -289,9 +295,13 @@ def run_table(table, title: str) -> None:
                 sim_dbg.ind = ind_mem
                 sim_dbg.relay_set()
                 print(f"        coarse_ind chosen ind={sim_dbg.ind:3d} SWR={fmt_swr(sim_dbg.SWR)}")
+                best_after_strat1 = (sim_dbg.ind, sim_dbg.cap, sim_dbg.SWR)
 
-                # Strategy 2: coarse_ind then coarse_cap (only if cap<=2 and ind<=2)
-                if sim_dbg.cap <= 2 and sim_dbg.ind <= 2:
+                # Strategy 2: coarse_ind then coarse_cap (unless gated off in firmware)
+                allow_alt = sim_dbg.cap <= 2 and sim_dbg.ind <= 2
+                if sim_dbg.flags.force_all_coarse_strategies:
+                    allow_alt = True
+                if allow_alt:
                     strat_label(2)
                     sim_dbg.cap = 0
                     sim_dbg.ind = 0
@@ -332,11 +342,15 @@ def run_table(table, title: str) -> None:
                     sim_dbg.cap = cap_mem
                     sim_dbg.relay_set()
                     print(f"        coarse_cap chosen cap={sim_dbg.cap:3d} SWR={fmt_swr(sim_dbg.SWR)}")
+                    best_after_strat2 = (sim_dbg.ind, sim_dbg.cap, sim_dbg.SWR)
                 else:
                     print("      Strategy 2 skipped (cap>2 or ind>2 after Strategy 1)")
 
-                # Strategy 3: coarse_ind_cap (only if cap<=2 and ind<=2)
-                if sim_dbg.cap <= 2 and sim_dbg.ind <= 2:
+                # Strategy 3: coarse_ind_cap (unless gated off in firmware)
+                allow_alt = sim_dbg.cap <= 2 and sim_dbg.ind <= 2
+                if sim_dbg.flags.force_all_coarse_strategies:
+                    allow_alt = True
+                if allow_alt:
                     strat_label(3)
                     sim_dbg.cap = 0
                     sim_dbg.ind = 0
@@ -359,8 +373,21 @@ def run_table(table, title: str) -> None:
                     sim_dbg.cap = ind_mem
                     sim_dbg.relay_set()
                     print(f"        coarse_ind_cap chosen ind=cap={sim_dbg.ind:3d} SWR={fmt_swr(sim_dbg.SWR)}")
+                    best_after_strat3 = (sim_dbg.ind, sim_dbg.cap, sim_dbg.SWR)
                 else:
                     print("      Strategy 3 skipped (cap>2 or ind>2 after Strategy 1)")
+
+                # Summaries
+                def fmt_state(t):
+                    if t is None:
+                        return "n/a"
+                    i, c, swr = t
+                    return f"ind={i:3d} cap={c:3d} SWR={fmt_swr(swr)}"
+
+                print("      Summary:")
+                print(f"        After Strategy 1: {fmt_state(best_after_strat1)}")
+                print(f"        After Strategy 2: {fmt_state(best_after_strat2)}")
+                print(f"        After Strategy 3: {fmt_state(best_after_strat3)}")
 
             coarse_debug(0)
             coarse_debug(1)
