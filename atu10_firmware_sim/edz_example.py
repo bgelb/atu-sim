@@ -168,9 +168,9 @@ def run_table(table, title: str) -> None:
     print("=" * 70)
     print(title)
     print("=" * 70)
-    ideal_width = 78
-    best_width = 78
-    algo_width = 78
+    ideal_width = 84
+    best_width = 84
+    algo_width = 84
     print(
         f"{'Freq':>14} | {'Z_load (R+jX)':>22} | "
         f"{'Ideal (L/C, topology, Zin, SWR)':<{ideal_width}}| "
@@ -188,16 +188,16 @@ def run_table(table, title: str) -> None:
         bank: LCBank = sim.bank
 
         def topo_label(sw: int, C_val: float) -> str:
-            shunt = "shunt-C" if C_val >= 0 else "shunt-L"
-            return f"{shunt} @{'load' if sw == 0 else 'input'}"
+            shunt = "shunt-C" if C_val > 0 else ("open" if C_val == 0 else "shunt-L")
+            return f"{shunt}@{'load' if sw == 0 else 'input'}"
 
         ideal = find_ideal_match(freq, zL, sim.z0)
         z_ideal = ideal["z_in"]
         ideal_str = (
-            f"L={ideal['L']*1e6:7.3f}u "
+            f"L={ideal['L']*1e6:8.3f}u "
             f"C={ideal['C']*1e12:8.1f}p "
             f"{topo_label(ideal['sw'], ideal['C']):>12} "
-            f"Zin={z_ideal.real:8.2f}+j{z_ideal.imag:8.2f} "
+            f"Zin={z_ideal.real:9.2f}+j{z_ideal.imag:9.2f} "
             f"SWR={fmt_swr(ideal['swr']):>6}"
         )
 
@@ -207,20 +207,20 @@ def run_table(table, title: str) -> None:
         z_best = l_network_input_impedance(freq, zL, l_bits, c_bits, ideal["sw"], bank)
         best_swr_near = swr_from_z(z_best, sim.z0)
         best_str = (
-            f"L={l_val*1e6:7.3f}u "
+            f"L={l_val*1e6:8.3f}u "
             f"C={c_val*1e12:8.1f}p "
             f"{topo_label(ideal['sw'], c_val):>12} "
-            f"Zin={z_best.real:8.2f}+j{z_best.imag:8.2f} "
+            f"Zin={z_best.real:9.2f}+j{z_best.imag:9.2f} "
             f"SWR={fmt_swr(best_swr_near):>6} "
             f"in_range={'Y' if in_range else 'N'}"
         )
 
         z_alg = l_network_input_impedance(freq, zL, sim.ind, sim.cap, sim.SW)
         algo_str = (
-            f"L={bank.l_from_bits(sim.ind)*1e6:7.3f}u "
+            f"L={bank.l_from_bits(sim.ind)*1e6:8.3f}u "
             f"C={bank.c_from_bits(sim.cap)*1e12:8.1f}p "
             f"{topo_label(sim.SW, bank.c_from_bits(sim.cap)):>12} "
-            f"Zin={z_alg.real:8.2f}+j{z_alg.imag:8.2f} "
+            f"Zin={z_alg.real:9.2f}+j{z_alg.imag:9.2f} "
             f"SWR={fmt_swr(sim.SWR):>6}"
         )
 
