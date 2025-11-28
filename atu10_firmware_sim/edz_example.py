@@ -111,57 +111,52 @@ def find_ideal_match(freq_hz: float, z_load: complex, z0: float) -> dict:
     w = 2 * math.pi * freq_hz
     candidates: list[dict] = []
 
-    # Topology sw=0: series L then shunt C
-    if R > 0 and R <= z0:
-        term = (R * z0) - (R * R)
-        if term >= 0:
-            for sign in (1.0, -1.0):
-                Xs = -X + sign * math.sqrt(term)
-                X_tot = X + Xs
-                denom = (R * R) + (X_tot * X_tot)
-                if denom == 0:
-                    continue
-                Bc = X_tot / denom
-                if Bc <= 0:
-                    continue
-                L = Xs / w
-                C = Bc / w
-                if L < 0 or C < 0:
-                    continue
-                z_in = continuous_input_impedance(freq_hz, z_load, L, C, 0)
-                swr = swr_from_z(z_in, z0)
-                candidates.append({"sw": 0, "L": L, "C": C, "z_in": z_in, "swr": swr})
-
-    # Topology sw=1: shunt C then series L
+    # sw=0 in simulator: shunt first (at load), then series
     denom_base = (R * R) + (X * X)
     if denom_base > 0:
         G = R / denom_base
         B_load = -X / denom_base
         if 0 < G < (1.0 / z0):
-            numerator = G - (z0 * G * G)
-            if numerator >= 0:
-                Btot = math.sqrt(numerator / z0)
+            target = (G - z0 * G * G) / z0
+            if target >= 0:
+                root = math.sqrt(target)
                 for sign in (1.0, -1.0):
-                    Bc = sign * Btot - B_load
-                    if Bc <= 0:
+                    B_total = sign * root
+                    Bc = B_total - B_load
+                    if Bc == 0:
                         continue
-                    y_total = complex(G, B_load + Bc)
-                    if y_total == 0:
-                        continue
-                    z_t = 1.0 / y_total
-                    Xs = -z_t.imag
-                    L = Xs / w
-                    C = Bc / w
-                    if L < 0 or C < 0:
-                        continue
-                    z_in = z_t + 1j * Xs
+                    Xs = B_total / (G * G + B_total * B_total)
+                    L_series = Xs / w
+                    C_shunt = Bc / w  # negative => shunt L
+                    z_in = continuous_input_impedance(freq_hz, z_load, L_series, C_shunt, 0)
                     swr = swr_from_z(z_in, z0)
                     candidates.append(
-                        {"sw": 1, "L": L, "C": C, "z_in": z_in, "swr": swr}
+                        {"sw": 0, "L": L_series, "C": C_shunt, "z_in": z_in, "swr": swr}
                     )
 
+    # sw=1 in simulator: series first, then shunt at input
+    if R > 0 and R < z0:
+        term = (R * z0) - (R * R)
+        if term >= 0:
+            root = math.sqrt(term)
+            for sign in (1.0, -1.0):
+                Xs = -X + sign * root
+                X_tot = X + Xs
+                denom = (R * R) + (X_tot * X_tot)
+                if denom == 0:
+                    continue
+                Bc = X_tot / denom  # shunt susceptance
+                if Bc == 0:
+                    continue
+                L_series = Xs / w
+                C_shunt = Bc / w
+                z_in = continuous_input_impedance(freq_hz, z_load, L_series, C_shunt, 1)
+                swr = swr_from_z(z_in, z0)
+                candidates.append(
+                    {"sw": 1, "L": L_series, "C": C_shunt, "z_in": z_in, "swr": swr}
+                )
+
     if not candidates:
-        # Fallback: return high SWR but with zero components
         z_in = z_load
         return {"sw": 0, "L": 0.0, "C": 0.0, "z_in": z_in, "swr": swr_from_z(z_in, z0)}
 
@@ -173,9 +168,9 @@ def run_table(table, title: str) -> None:
     print("=" * 70)
     print(title)
     print("=" * 70)
-    ideal_width = 64
-    best_width = 64
-    algo_width = 64
+    ideal_width = 72
+    best_width = 72
+    algo_width = 72
     print(
         f"{'Freq':>14} | {'Z_load (R+jX)':>22} | "
         f"{'Ideal (L/C, topology, Zin, SWR)':<{ideal_width}}| "
@@ -194,10 +189,14 @@ def run_table(table, title: str) -> None:
 
         ideal = find_ideal_match(freq, zL, sim.z0)
         z_ideal = ideal["z_in"]
+        def topo_label(sw: int, C_val: float) -> str:
+            shunt = "shunt-C" if C_val >= 0 else "shunt-L"
+            return f"{shunt} @{'load' if sw == 0 else 'input'}"
+
         ideal_str = (
             f"L={ideal['L']*1e6:7.3f}u "
             f"C={ideal['C']*1e12:8.1f}p "
-            f"SW={ideal['sw']} "
+            f"{topo_label(ideal['sw'], ideal['C']):>12} "
             f"Zin={z_ideal.real:8.2f}+j{z_ideal.imag:8.2f} "
             f"SWR={fmt_swr(ideal['swr']):>6}"
         )
@@ -209,7 +208,7 @@ def run_table(table, title: str) -> None:
         best_str = (
             f"L={bank.l_from_bits(best_state[0])*1e6:7.3f}u "
             f"C={bank.c_from_bits(best_state[1])*1e12:8.1f}p "
-            f"SW={best_state[2]} "
+            f"{topo_label(best_state[2], bank.c_from_bits(best_state[1])):>12} "
             f"Zin={z_best.real:8.2f}+j{z_best.imag:8.2f} "
             f"SWR={fmt_swr(best_swr):>6}"
         )
@@ -218,7 +217,7 @@ def run_table(table, title: str) -> None:
         algo_str = (
             f"L={bank.l_from_bits(sim.ind)*1e6:7.3f}u "
             f"C={bank.c_from_bits(sim.cap)*1e12:8.1f}p "
-            f"SW={sim.SW} "
+            f"{topo_label(sim.SW, bank.c_from_bits(sim.cap)):>12} "
             f"Zin={z_alg.real:8.2f}+j{z_alg.imag:8.2f} "
             f"SWR={fmt_swr(sim.SWR):>6}"
         )
