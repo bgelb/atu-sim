@@ -9,6 +9,10 @@ This is a small Python project that models:
 It also includes an example script (`edz_example.py`) that evaluates
 the tuner against the feedpoint impedances of an 88' #12 copper
 doublet from Cebik's tables (free-space and 70' over ground).
+The intent is to see how the firmware behaves when asked to tune that
+common doublet directly at the feedpoint (no intervening feedline),
+comparing the ideal brute-force LC match against what the ATU-10
+algorithm actually converges to across the published impedances.
 
 > NOTE: This is a **simulation**. It ignores detector noise, relay
 > timing, and many hardware details, but the algorithm structure
