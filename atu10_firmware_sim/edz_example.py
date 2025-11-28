@@ -102,53 +102,34 @@ def solve_shunt_then_series(
     return {"sw": 1, "L": L, "C": C}
 
 
-def find_ideal_match(freq_hz: float, z_load: complex, z0: float) -> dict | None:
-    w = 2 * math.pi * freq_hz
-    bank = LCBank()
-    L_max = bank.l_from_bits((1 << len(bank.l_values)) - 1)
-    C_max = bank.c_from_bits((1 << len(bank.c_values)) - 1)
+def _logspace(start_exp: float, stop_exp: float, num: int) -> list[float]:
+    step = (stop_exp - start_exp) / (num - 1)
+    return [10 ** (start_exp + i * step) for i in range(num)]
 
-    candidates: list[dict] = []
 
-    # sw = 1: shunt C at input, series L to load (low-R to high-R)
-    R = z_load.real
-    X = z_load.imag
-    if R > 0 and R <= z0:
-        term = (R * z0) - (R * R)
-        if term >= 0:
-            X_req = math.sqrt(term)
-            denom = (R * R) + (X_req * X_req)
-            G = R / denom
-            if abs(G - (1.0 / z0)) < 1e-6:
-                L = (X_req - X) / w
-                if L >= 0:
-                    C = X_req / (w * denom)
-                    if C >= 0:
-                        candidates.append({"sw": 1, "L": L, "C": C})
+def find_ideal_match(freq_hz: float, z_load: complex, z0: float) -> dict:
+    """
+    Scan continuous L/C values (both topologies) to find a near-1:1 solution.
+    """
+    l_values = _logspace(-9, -3, 60)  # 1 nH .. 1 mH
+    c_values = _logspace(-13, -8, 60)  # ~0.05 pF .. 10 nF
 
-    # sw = 0: series L first, then shunt C across load (high-R to low-R)
-    y_load = 1.0 / z_load if abs(z_load) > 1e-18 else 0j
-    G = y_load.real
-    B = y_load.imag
-    if G > 0 and G < (1.0 / z0):
-        delta = (G / z0) - (G * G)
-        if delta >= 0:
-            B_total = math.sqrt(delta)
-            Bc = B_total - B
-            if Bc >= 0:
-                denom = (G * G) + (B + Bc) * (B + Bc)
-                L = -(B + Bc) / (w * denom)
-                if L >= 0:
-                    candidates.append({"sw": 0, "L": L, "C": Bc / w})
+    best: dict | None = None
+    best_swr = 999
 
-    if not candidates:
-        return None
+    for sw in (0, 1):
+        for L in l_values:
+            for C in c_values:
+                z_in = continuous_input_impedance(freq_hz, z_load, L, C, sw)
+                swr = swr_from_z(z_in, z0)
+                if swr < best_swr:
+                    best_swr = swr
+                    best = {"sw": sw, "L": L, "C": C, "z_in": z_in, "swr": swr}
+                    if swr == 100:
+                        return best
 
-    def cost(entry: dict) -> float:
-        z_in = continuous_input_impedance(freq_hz, z_load, entry["L"], entry["C"], entry["sw"])
-        return abs(z_in - z0)
-
-    return min(candidates, key=cost)
+    assert best is not None
+    return best
 
 
 def run_table(table, title: str) -> None:
@@ -156,13 +137,16 @@ def run_table(table, title: str) -> None:
     print("=" * 70)
     print(title)
     print("=" * 70)
+    ideal_width = 64
+    best_width = 64
+    algo_width = 64
     print(
-        f"{'Freq':>12} | {'Z_load (R+jX)':>22} | "
-        f"{'Ideal (L/C, Zin, SWR)':>36} | "
-        f"{'Best discrete (L/C, Zin, SWR)':>36} | "
-        f"{'Tune algo (L/C, Zin, SWR)':>36}"
+        f"{'Freq':>14} | {'Z_load (R+jX)':>22} | "
+        f"{'Ideal (L/C, Zin, SWR)':<{ideal_width}}| "
+        f"{'Best discrete (L/C, Zin, SWR)':<{best_width}}| "
+        f"{'Tune algo (L/C, Zin, SWR)':<{algo_width}}"
     )
-    print("-" * 148)
+    print("-" * (14 + 3 + 22 + 3 + ideal_width + 2 + best_width + 2 + algo_width))
 
     for label, freq, zL in table:
         sim = TunerSim(freq_hz=freq, z_load=zL)
@@ -173,44 +157,39 @@ def run_table(table, title: str) -> None:
         bank: LCBank = sim.bank
 
         ideal = find_ideal_match(freq, zL, sim.z0)
-        if ideal:
-            z_ideal = continuous_input_impedance(
-                freq, zL, ideal["L"], ideal["C"], ideal["sw"]
-            )
-            swr_ideal = 100  # by definition ideal match
-            ideal_str = (
-                f"L={ideal['L']*1e6:5.2f}u C={ideal['C']*1e12:6.1f}p "
-                f"Z={z_ideal.real:6.1f}+j{z_ideal.imag:6.1f} "
-                f"SWR={fmt_swr(swr_ideal)}"
-            )
-        else:
-            ideal_str = "--"
+        z_ideal = ideal["z_in"]
+        ideal_str = (
+            f"L={ideal['L']*1e6:7.3f}u "
+            f"C={ideal['C']*1e12:8.1f}p "
+            f"Zin={z_ideal.real:8.2f}+j{z_ideal.imag:8.2f} "
+            f"SWR={fmt_swr(ideal['swr']):>6}"
+        )
 
         sign = "+" if zL.imag >= 0 else "-"
         z_best = l_network_input_impedance(
             freq, zL, best_state[0], best_state[1], best_state[2], bank
         )
         best_str = (
-            f"L={bank.l_from_bits(best_state[0])*1e6:5.2f}u "
-            f"C={bank.c_from_bits(best_state[1])*1e12:6.1f}p "
-            f"Z={z_best.real:6.1f}+j{z_best.imag:6.1f} "
-            f"SWR={fmt_swr(best_swr)}"
+            f"L={bank.l_from_bits(best_state[0])*1e6:7.3f}u "
+            f"C={bank.c_from_bits(best_state[1])*1e12:8.1f}p "
+            f"Zin={z_best.real:8.2f}+j{z_best.imag:8.2f} "
+            f"SWR={fmt_swr(best_swr):>6}"
         )
 
         z_alg = l_network_input_impedance(freq, zL, sim.ind, sim.cap, sim.SW)
         algo_str = (
-            f"L={bank.l_from_bits(sim.ind)*1e6:5.2f}u "
-            f"C={bank.c_from_bits(sim.cap)*1e12:6.1f}p "
-            f"Z={z_alg.real:6.1f}+j{z_alg.imag:6.1f} "
-            f"SWR={fmt_swr(sim.SWR)}"
+            f"L={bank.l_from_bits(sim.ind)*1e6:7.3f}u "
+            f"C={bank.c_from_bits(sim.cap)*1e12:8.1f}p "
+            f"Zin={z_alg.real:8.2f}+j{z_alg.imag:8.2f} "
+            f"SWR={fmt_swr(sim.SWR):>6}"
         )
 
         print(
-            f"{label:>12} | "
+            f"{label:>14} | "
             f"{zL.real:6.0f} {sign} j{abs(zL.imag):4.0f} | "
-            f"{ideal_str:36} | "
-            f"{best_str:36} | "
-            f"{algo_str:36}"
+            f"{ideal_str:<{ideal_width}}| "
+            f"{best_str:<{best_width}}| "
+            f"{algo_str:<{algo_width}}"
         )
 
 
