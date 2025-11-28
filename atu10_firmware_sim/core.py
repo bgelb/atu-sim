@@ -33,6 +33,30 @@ class LCBank:
     def c_from_bits(self, bits: int) -> float:
         return sum(v for i, v in enumerate(self.c_values) if bits & (1 << i))
 
+    def nearest_lc(
+        self, l_target: float, c_target: float
+    ) -> tuple[int, float, int, float, bool]:
+        """
+        Find relay bitmasks that most closely realize the requested L and C.
+
+        Returns (l_bits, l_henry, c_bits, c_farad, in_range) where in_range
+        is True only if both requested targets fall within achievable min/max.
+        """
+        l_bits_best, l_value_best = min(
+            ((bits, self.l_from_bits(bits)) for bits in range(1 << len(self.l_values))),
+            key=lambda pair: abs(pair[1] - l_target),
+        )
+        c_bits_best, c_value_best = min(
+            ((bits, self.c_from_bits(bits)) for bits in range(1 << len(self.c_values))),
+            key=lambda pair: abs(pair[1] - c_target),
+        )
+
+        l_max = self.l_from_bits((1 << len(self.l_values)) - 1)
+        c_max = self.c_from_bits((1 << len(self.c_values)) - 1)
+        in_range = (0.0 <= l_target <= l_max) and (0.0 <= c_target <= c_max)
+
+        return l_bits_best, l_value_best, c_bits_best, c_value_best, in_range
+
 
 def _safe_inv(z: complex) -> complex:
     if abs(z) < 1e-12:
