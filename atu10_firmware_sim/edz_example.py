@@ -133,9 +133,12 @@ def run_table(table, title: str) -> None:
     print(title)
     print("=" * 70)
     print(
-        f"{'Freq':>12} | {'Z_load (R+jX)':>22} | {'Best LC SWR':>10} | {'Algo SWR':>10}"
+        f"{'Freq':>12} | {'Z_load (R+jX)':>22} | {'Best':>6} | {'Algo':>6} | "
+        f"{'Ideal':>6} | {'Near':>6} | {'Range':>5} | "
+        f"{'Ideal L(uH)':>12} | {'Ideal C(pF)':>12} | "
+        f"{'Algo L(uH)':>12} | {'Algo C(pF)':>12}"
     )
-    print("-" * 70)
+    print("-" * 128)
 
     for label, freq, zL in table:
         sim = TunerSim(freq_hz=freq, z_load=zL)
@@ -143,18 +146,14 @@ def run_table(table, title: str) -> None:
 
         best_swr, best_state = brute_force_best(freq, zL)
         sim.tune()
-
-        sign = "+" if zL.imag >= 0 else "-"
-        print(
-            f"{label:>12} | "
-            f"{zL.real:6.0f} {sign} j{abs(zL.imag):4.0f} | "
-            f"{fmt_swr(best_swr):>10} | "
-            f"{fmt_swr(sim.SWR):>10} "
-            f"(ind={sim.ind:3d}, cap={sim.cap:3d}, SW={sim.SW})"
-        )
+        bank: LCBank = sim.bank
 
         ideal = find_ideal_match(freq, zL, sim.z0)
-        bank: LCBank = sim.bank
+        swr_ideal = None
+        swr_near = None
+        in_range = None
+        ideal_L_str = " " * 12
+        ideal_C_str = " " * 12
 
         if ideal:
             z_ideal = continuous_input_impedance(
@@ -166,29 +165,25 @@ def run_table(table, title: str) -> None:
             )
             z_near = l_network_input_impedance(freq, zL, l_bits, c_bits, ideal["sw"])
             swr_near = swr_from_z(z_near, sim.z0)
-            print(
-                f"    Ideal match (SW={ideal['sw']}): "
-                f"L={ideal['L']*1e6:.3f} uH, C={ideal['C']*1e12:.1f} pF, "
-                f"Z_in={z_ideal.real:6.1f} + j{z_ideal.imag:6.1f}, "
-                f"SWR={fmt_swr(swr_ideal)}"
-            )
-            print(
-                f"    Nearest discrete: "
-                f"L={l_val*1e6:.3f} uH (bits={l_bits:03d}), "
-                f"C={c_val*1e12:.1f} pF (bits={c_bits:03d}), "
-                f"in_range={in_range}, "
-                f"Z_in={z_near.real:6.1f} + j{z_near.imag:6.1f}, "
-                f"SWR={fmt_swr(swr_near)}"
-            )
+            ideal_L_str = f"{ideal['L']*1e6:12.3f}"
+            ideal_C_str = f"{ideal['C']*1e12:12.1f}"
         else:
-            print("    Ideal match: not solvable with simple L-network.")
+            ideal_L_str = " " * 12
+            ideal_C_str = " " * 12
 
-        z_alg = l_network_input_impedance(freq, zL, sim.ind, sim.cap, sim.SW)
+        sign = "+" if zL.imag >= 0 else "-"
         print(
-            f"    Algo choice: L={bank.l_from_bits(sim.ind)*1e6:.3f} uH, "
-            f"C={bank.c_from_bits(sim.cap)*1e12:.1f} pF, "
-            f"Z_in={z_alg.real:6.1f} + j{z_alg.imag:6.1f}, "
-            f"SWR={fmt_swr(sim.SWR)}"
+            f"{label:>12} | "
+            f"{zL.real:6.0f} {sign} j{abs(zL.imag):4.0f} | "
+            f"{fmt_swr(best_swr):>6} | "
+            f"{fmt_swr(sim.SWR):>6} | "
+            f"{(fmt_swr(swr_ideal) if swr_ideal is not None else '--'):>6} | "
+            f"{(fmt_swr(swr_near) if swr_near is not None else '--'):>6} | "
+            f"{(('Y' if in_range else 'N') if in_range is not None else '--'):>5} | "
+            f"{ideal_L_str} | "
+            f"{ideal_C_str} | "
+            f"{bank.l_from_bits(sim.ind)*1e6:12.3f} | "
+            f"{bank.c_from_bits(sim.cap)*1e12:12.1f}"
         )
 
 
