@@ -168,9 +168,9 @@ def run_table(table, title: str) -> None:
     print("=" * 70)
     print(title)
     print("=" * 70)
-    ideal_width = 72
-    best_width = 72
-    algo_width = 72
+    ideal_width = 78
+    best_width = 78
+    algo_width = 78
     print(
         f"{'Freq':>14} | {'Z_load (R+jX)':>22} | "
         f"{'Ideal (L/C, topology, Zin, SWR)':<{ideal_width}}| "
@@ -187,12 +187,12 @@ def run_table(table, title: str) -> None:
         sim.tune()
         bank: LCBank = sim.bank
 
-        ideal = find_ideal_match(freq, zL, sim.z0)
-        z_ideal = ideal["z_in"]
         def topo_label(sw: int, C_val: float) -> str:
             shunt = "shunt-C" if C_val >= 0 else "shunt-L"
             return f"{shunt} @{'load' if sw == 0 else 'input'}"
 
+        ideal = find_ideal_match(freq, zL, sim.z0)
+        z_ideal = ideal["z_in"]
         ideal_str = (
             f"L={ideal['L']*1e6:7.3f}u "
             f"C={ideal['C']*1e12:8.1f}p "
@@ -201,16 +201,18 @@ def run_table(table, title: str) -> None:
             f"SWR={fmt_swr(ideal['swr']):>6}"
         )
 
-        sign = "+" if zL.imag >= 0 else "-"
-        z_best = l_network_input_impedance(
-            freq, zL, best_state[0], best_state[1], best_state[2], bank
+        l_bits, l_val, c_bits, c_val, in_range = bank.nearest_lc(
+            max(ideal["L"], 0.0), max(ideal["C"], 0.0)
         )
+        z_best = l_network_input_impedance(freq, zL, l_bits, c_bits, ideal["sw"], bank)
+        best_swr_near = swr_from_z(z_best, sim.z0)
         best_str = (
-            f"L={bank.l_from_bits(best_state[0])*1e6:7.3f}u "
-            f"C={bank.c_from_bits(best_state[1])*1e12:8.1f}p "
-            f"{topo_label(best_state[2], bank.c_from_bits(best_state[1])):>12} "
+            f"L={l_val*1e6:7.3f}u "
+            f"C={c_val*1e12:8.1f}p "
+            f"{topo_label(ideal['sw'], c_val):>12} "
             f"Zin={z_best.real:8.2f}+j{z_best.imag:8.2f} "
-            f"SWR={fmt_swr(best_swr):>6}"
+            f"SWR={fmt_swr(best_swr_near):>6} "
+            f"in_range={'Y' if in_range else 'N'}"
         )
 
         z_alg = l_network_input_impedance(freq, zL, sim.ind, sim.cap, sim.SW)
@@ -222,6 +224,7 @@ def run_table(table, title: str) -> None:
             f"SWR={fmt_swr(sim.SWR):>6}"
         )
 
+        sign = "+" if zL.imag >= 0 else "-"
         print(
             f"{label:>14} | "
             f"{zL.real:6.0f} {sign} j{abs(zL.imag):4.0f} | "
