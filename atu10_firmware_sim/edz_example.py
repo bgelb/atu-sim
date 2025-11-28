@@ -203,18 +203,15 @@ def run_table(table, title: str) -> None:
             f"SWR={fmt_swr(ideal['swr']):>6}"
         )
 
-        l_bits, l_val, c_bits, c_val, in_range = bank.nearest_lc(
-            max(ideal["L"], 0.0), max(ideal["C"], 0.0)
+        z_best = l_network_input_impedance(
+            freq, zL, best_state[0], best_state[1], best_state[2], bank
         )
-        z_best = l_network_input_impedance(freq, zL, l_bits, c_bits, ideal["sw"], bank)
-        best_swr_near = swr_from_z(z_best, sim.z0)
         best_str = (
-            f"L={l_val*1e6:8.3f}u "
-            f"C={c_val*1e12:8.1f}p "
-            f"{topo_label(ideal['sw'], c_val):>12} "
+            f"L={bank.l_from_bits(best_state[0])*1e6:8.3f}u "
+            f"C={bank.c_from_bits(best_state[1])*1e12:8.1f}p "
+            f"{topo_label(best_state[2], bank.c_from_bits(best_state[1])):>12} "
             f"Zin={z_best.real:9.2f}+j{z_best.imag:9.2f} "
-            f"SWR={fmt_swr(best_swr_near):>6} "
-            f"in_range={'Y' if in_range else 'N'}"
+            f"SWR={fmt_swr(best_swr):>6}"
         )
 
         z_alg = l_network_input_impedance(freq, zL, sim.ind, sim.cap, sim.SW)
