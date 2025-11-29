@@ -65,7 +65,7 @@ python -m atu10_firmware_sim.edz_example --skip-plots
 python -m atu10_firmware_sim.edz_example --algorithm atu10
 
 # Run regression tests (uses current default BG and reference ATU-10 algos)
-python -m unittest discover -s tests
+pytest
 ```
 
 ## Simulation flags
