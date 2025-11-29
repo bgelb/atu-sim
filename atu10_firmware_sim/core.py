@@ -701,7 +701,7 @@ class TunerSim:
         self.get_swr()
         self._trace("bg_start")
 
-        ind_candidates = [0, 32, 64, 96, 127]
+        ind_candidates = [0, 16, 32, 48, 64, 80, 96, 112, 127]
         cap_candidates = [0, 1, 2, 3, 5, 7, 9, 11, 15, 19, 23, 27, 43, 59, 75, 91, 123]
 
         best_primary_sw0 = best_secondary_sw0 = None
