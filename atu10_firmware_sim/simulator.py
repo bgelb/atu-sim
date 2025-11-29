@@ -13,6 +13,7 @@ from .tuning_algos.legacy import LegacyATU10Algo, LegacyBGAlgo, LegacyResult
 class TuneTraceEntry:
     step: int
     topology: Topology
+    sw: int
     l_bits: int
     c_bits: int
     z_in: complex
@@ -70,6 +71,7 @@ class ATUSimulator:
                     TuneTraceEntry(
                         step=t["step"],
                         topology=topo,
+                        sw=0 if topo == Topology.SHUNT_AT_LOAD else 1,
                         l_bits=t["l_bits"],
                         c_bits=t["c_bits"],
                         z_in=z_in,

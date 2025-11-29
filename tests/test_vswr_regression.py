@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from atu10_firmware_sim.core import SimFlags, TunerSim
-from atu10_firmware_sim.edz_example import TABLE1, TABLE3
+from atu10_firmware_sim.cebik_tables import TABLE1, TABLE3
+from atu10_firmware_sim.hardware import atu10_bank
+from atu10_firmware_sim.detectors import ATU10IntegerVSWRDetector
+from atu10_firmware_sim.simulator import ATUSimulator
 
 EXPECTED = {
     "bg": {
@@ -43,11 +45,12 @@ EXPECTED = {
 
 def run_table(table, algo: str) -> dict[str, int]:
     swrs: dict[str, int] = {}
+    bank = atu10_bank()
+    detector = ATU10IntegerVSWRDetector()
     for label, freq, z_load in table:
-        sim = TunerSim(freq_hz=freq, z_load=z_load, flags=SimFlags(algorithm=algo))
-        sim.atu_reset()
-        sim.tune()
-        swrs[label] = sim.SWR
+        sim = ATUSimulator(bank=bank, detector=detector, algorithm=algo)
+        result = sim.tune(freq, z_load)
+        swrs[label] = result.final_swr
     return swrs
 
 
