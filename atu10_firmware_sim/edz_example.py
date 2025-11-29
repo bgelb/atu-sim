@@ -1,8 +1,21 @@
 from __future__ import annotations
 
+import argparse
 import math
+from pathlib import Path
 
-from .core import LCBank, SimFlags, TunerSim, brute_force_best, l_network_input_impedance, swr_from_z
+import matplotlib.pyplot as plt
+import numpy as np
+
+from .core import (
+    LCBank,
+    SimFlags,
+    TunerSim,
+    brute_force_best,
+    l_network_input_impedance,
+    swr_from_z,
+    swr_grid,
+)
 
 
 TABLE1 = [
@@ -26,6 +39,142 @@ def fmt_swr(swr_int: int) -> str:
     if swr_int >= 999:
         return ">= 9.99"
     return f"{swr_int / 100.0:.2f}"
+
+
+def _safe_label(label: str) -> str:
+    return "".join(c if c.isalnum() else "_" for c in label)
+
+
+def plot_swr_grid(
+    grid: list[list[int]],
+    label: str,
+    sw: int,
+    out_dir: Path,
+    trace: list[dict] | None = None,
+) -> Path:
+    """
+    Render a 128x128 SWR grid to a PNG file using matplotlib.
+    Rows = inductor bitmask (0..127), cols = capacitor bitmask (0..127).
+    """
+    data = np.array(grid, dtype=float) / 100.0  # convert to SWR ratio
+    bounds = [
+        1.0,
+        1.2,
+        1.3,
+        1.4,
+        1.5,
+        1.7,
+        2.0,
+        2.5,
+        3.0,
+        4.0,
+        5.0,
+        6.5,
+        8.0,
+        9.5,
+        11.0,
+    ]
+    colors = [
+        "#006d2c",  # <1.2
+        "#238b45",  # <1.3
+        "#41ae76",  # <1.4
+        "#66c2a4",  # <1.5
+        "#8dd3c7",  # <1.7
+        "#fee391",  # <2.0
+        "#fec44f",  # <2.5
+        "#fe9929",  # <3.0
+        "#fdae61",  # <4.0
+        "#f46d43",  # <5.0
+        "#d53e4f",  # <6.5
+        "#9e0142",  # <8.0
+        "#542788",  # <9.5
+        "#d9d9d9",  # >=9.5 up to 11 (light gray)
+    ]
+    cmap = plt.matplotlib.colors.ListedColormap(colors)
+    norm = plt.matplotlib.colors.BoundaryNorm(bounds, cmap.N)
+
+    fig, ax = plt.subplots(figsize=(16, 14), dpi=150)  # larger canvas; cells appear larger
+    im = ax.imshow(data, origin="upper", cmap=cmap, norm=norm, aspect="equal")
+    ax.set_title(f"{label} (SW={sw})")
+    ax.set_xlabel("Capacitor bitmask (0-127)")
+    ax.set_ylabel("Inductor bitmask (0-127)")
+    ticks = [1.1, 1.25, 1.35, 1.45, 1.55, 1.8, 2.25, 2.75, 3.5, 4.5, 5.75, 7.25, 9.0, 10.0]
+    tick_labels = [
+        "<1.2",
+        "<1.3",
+        "<1.4",
+        "<1.5",
+        "<1.7",
+        "<2.0",
+        "<2.5",
+        "<3.0",
+        "<4.0",
+        "<5.0",
+        "<6.5",
+        "<8.0",
+        "<9.5",
+        ">=9.5",
+    ]
+    cbar = fig.colorbar(im, ax=ax, boundaries=bounds, ticks=ticks, label="SWR")
+    cbar.ax.set_yticklabels(tick_labels)
+
+    if trace:
+        trace_sw = [t for t in trace if t["SW"] == sw]
+        coarse_pts = [(t["cap"], t["ind"]) for t in trace_sw if t["phase"].startswith("coarse")]
+        sharp_pts = [(t["cap"], t["ind"]) for t in trace_sw if t["phase"].startswith("sharp")]
+        start_pts = [(t["cap"], t["ind"]) for t in trace_sw if t["phase"] in ("reset", "tune_start")]
+
+        if coarse_pts:
+            ax.scatter(
+                [p[0] for p in coarse_pts],
+                [p[1] for p in coarse_pts],
+                marker="^",
+                color="black",
+                s=14,
+                label="coarse steps",
+                alpha=0.8,
+            )
+        if sharp_pts:
+            ax.scatter(
+                [p[0] for p in sharp_pts],
+                [p[1] for p in sharp_pts],
+                marker="o",
+                color="white",
+                edgecolors="black",
+                s=18,
+                label="sharp steps",
+                alpha=0.9,
+            )
+            for (x0, y0), (x1, y1) in zip(sharp_pts[:-1], sharp_pts[1:]):
+                ax.annotate(
+                    "",
+                    xy=(x1, y1),
+                    xytext=(x0, y0),
+                    arrowprops=dict(arrowstyle="->", color="black", lw=0.8),
+                )
+        if start_pts:
+            ax.scatter(
+                [p[0] for p in start_pts],
+                [p[1] for p in start_pts],
+                marker="s",
+                color="cyan",
+                edgecolors="black",
+                s=20,
+                label="start/reset",
+                alpha=0.8,
+            )
+
+        if coarse_pts or sharp_pts or start_pts:
+            ax.legend(loc="upper right")
+
+    fig.tight_layout()
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"swr_grid_{_safe_label(label)}_sw{sw}.png"
+    path = out_dir / filename
+    fig.savefig(path)
+    plt.close(fig)
+    return path
 
 
 def continuous_input_impedance(
@@ -163,11 +312,17 @@ def find_ideal_match(freq_hz: float, z_load: complex, z0: float) -> dict:
     return min(candidates, key=lambda c: c["swr"])
 
 
-def run_table(table, title: str) -> None:
+def run_table(
+    table, title: str, flags: SimFlags | None = None, return_last_sim: bool = False
+) -> TunerSim | None:
+    if flags is None:
+        flags = SimFlags()
+
     print()
     print("=" * 70)
     print(title)
     print("=" * 70)
+    print(f"SimFlags: {flags}")
     freq_width = max(len("Freq"), max(len(label) for label, _, _ in table))
     load_width = 18
     ideal_width = 88
@@ -181,11 +336,12 @@ def run_table(table, title: str) -> None:
     )
     print("-" * (freq_width + 3 + load_width + 3 + ideal_width + 2 + best_width + 2 + algo_width))
 
-    for label, freq, zL in table:
-        sim = TunerSim(freq_hz=freq, z_load=zL, flags=SimFlags(force_all_coarse_strategies=True))
-        sim.atu_reset()
+    last_sim: TunerSim | None = None
 
-        verbose_coarse = "7.0 MHz (70 ft)" in label
+    for label, freq, zL in table:
+        sim = TunerSim(freq_hz=freq, z_load=zL, flags=flags)
+        sim.atu_reset()
+        last_sim = sim
 
         best_swr, best_state = brute_force_best(freq, zL)
         sim.tune()
@@ -235,167 +391,101 @@ def run_table(table, title: str) -> None:
             f"{algo_str:<{algo_width}}"
         )
 
-        if verbose_coarse:
-            def coarse_debug(sw_val: int) -> None:
-                print(f"    Coarse sweep debug (reset, {'shunt@load' if sw_val==0 else 'shunt@input'}):")
-                sim_dbg = TunerSim(
-                    freq_hz=freq,
-                    z_load=zL,
-                    flags=SimFlags(force_all_coarse_strategies=True),
-                )
-                sim_dbg.atu_reset()
-                sim_dbg.SW = sw_val
-                sim_dbg.relay_set()
-                print(f"      start: SWR={fmt_swr(sim_dbg.SWR)} ind={sim_dbg.ind:3d} cap={sim_dbg.cap:3d}")
-
-                def strat_label(n: int) -> None:
-                    print(f"      Strategy {n}:")
-
-                best_after_strat1 = best_after_strat2 = best_after_strat3 = None
-
-                # Strategy 1: coarse_cap then coarse_ind
-                strat_label(1)
-                sim_dbg.cap = 0
-                sim_dbg.ind = 0
-                sim_dbg.relay_set()
-                # coarse_cap
-                sim_dbg.get_swr()
-                swr_mem = sim_dbg.SWR // 10
-                cap_mem = 0
-                cap = 1
-                while cap < 64:
-                    sim_dbg.relay_set(cap=cap)
-                    swr_scaled = sim_dbg.SWR // 10
-                    print(f"        cap step: cap={cap:3d} SWR={fmt_swr(sim_dbg.SWR)} scaled={swr_scaled}")
-                    if swr_scaled <= swr_mem:
-                        cap_mem = cap
-                        swr_mem = swr_scaled
-                        cap *= 2
-                    else:
-                        break
-                sim_dbg.cap = cap_mem
-                sim_dbg.relay_set()
-                print(f"        coarse_cap chosen cap={sim_dbg.cap:3d} SWR={fmt_swr(sim_dbg.SWR)}")
-
-                # coarse_ind
-                sim_dbg.get_swr()
-                swr_mem = sim_dbg.SWR // 10
-                ind_mem = 0
-                ind = 1
-                while ind < 64:
-                    sim_dbg.relay_set(ind=ind)
-                    swr_scaled = sim_dbg.SWR // 10
-                    print(f"        ind step: ind={ind:3d} SWR={fmt_swr(sim_dbg.SWR)} scaled={swr_scaled}")
-                    if swr_scaled <= swr_mem:
-                        ind_mem = ind
-                        swr_mem = swr_scaled
-                        ind *= 2
-                    else:
-                        break
-                sim_dbg.ind = ind_mem
-                sim_dbg.relay_set()
-                print(f"        coarse_ind chosen ind={sim_dbg.ind:3d} SWR={fmt_swr(sim_dbg.SWR)}")
-                best_after_strat1 = (sim_dbg.ind, sim_dbg.cap, sim_dbg.SWR)
-
-                # Strategy 2: coarse_ind then coarse_cap (unless gated off in firmware)
-                allow_alt = sim_dbg.cap <= 2 and sim_dbg.ind <= 2
-                if sim_dbg.flags.force_all_coarse_strategies:
-                    allow_alt = True
-                if allow_alt:
-                    strat_label(2)
-                    sim_dbg.cap = 0
-                    sim_dbg.ind = 0
-                    sim_dbg.relay_set()
-                    # coarse_ind
-                    sim_dbg.get_swr()
-                    swr_mem = sim_dbg.SWR // 10
-                    ind_mem = 0
-                    ind = 1
-                    while ind < 64:
-                        sim_dbg.relay_set(ind=ind)
-                        swr_scaled = sim_dbg.SWR // 10
-                        print(f"        ind step: ind={ind:3d} SWR={fmt_swr(sim_dbg.SWR)} scaled={swr_scaled}")
-                        if swr_scaled <= swr_mem:
-                            ind_mem = ind
-                            swr_mem = swr_scaled
-                            ind *= 2
-                        else:
-                            break
-                    sim_dbg.ind = ind_mem
-                    sim_dbg.relay_set()
-                    print(f"        coarse_ind chosen ind={sim_dbg.ind:3d} SWR={fmt_swr(sim_dbg.SWR)}")
-                    # coarse_cap
-                    sim_dbg.get_swr()
-                    swr_mem = sim_dbg.SWR // 10
-                    cap_mem = 0
-                    cap = 1
-                    while cap < 64:
-                        sim_dbg.relay_set(cap=cap)
-                        swr_scaled = sim_dbg.SWR // 10
-                        print(f"        cap step: cap={cap:3d} SWR={fmt_swr(sim_dbg.SWR)} scaled={swr_scaled}")
-                        if swr_scaled <= swr_mem:
-                            cap_mem = cap
-                            swr_mem = swr_scaled
-                            cap *= 2
-                        else:
-                            break
-                    sim_dbg.cap = cap_mem
-                    sim_dbg.relay_set()
-                    print(f"        coarse_cap chosen cap={sim_dbg.cap:3d} SWR={fmt_swr(sim_dbg.SWR)}")
-                    best_after_strat2 = (sim_dbg.ind, sim_dbg.cap, sim_dbg.SWR)
-                else:
-                    print("      Strategy 2 skipped (cap>2 or ind>2 after Strategy 1)")
-
-                # Strategy 3: coarse_ind_cap (unless gated off in firmware)
-                allow_alt = sim_dbg.cap <= 2 and sim_dbg.ind <= 2
-                if sim_dbg.flags.force_all_coarse_strategies:
-                    allow_alt = True
-                if allow_alt:
-                    strat_label(3)
-                    sim_dbg.cap = 0
-                    sim_dbg.ind = 0
-                    sim_dbg.relay_set()
-                    sim_dbg.get_swr()
-                    swr_mem = sim_dbg.SWR // 10
-                    ind_mem = 0
-                    ind = 1
-                    while ind < 64:
-                        sim_dbg.relay_set(ind=ind, cap=ind)
-                        swr_scaled = sim_dbg.SWR // 10
-                        print(f"        ind=cap step: val={ind:3d} SWR={fmt_swr(sim_dbg.SWR)} scaled={swr_scaled}")
-                        if swr_scaled <= swr_mem:
-                            ind_mem = ind
-                            swr_mem = swr_scaled
-                            ind *= 2
-                        else:
-                            break
-                    sim_dbg.ind = ind_mem
-                    sim_dbg.cap = ind_mem
-                    sim_dbg.relay_set()
-                    print(f"        coarse_ind_cap chosen ind=cap={sim_dbg.ind:3d} SWR={fmt_swr(sim_dbg.SWR)}")
-                    best_after_strat3 = (sim_dbg.ind, sim_dbg.cap, sim_dbg.SWR)
-                else:
-                    print("      Strategy 3 skipped (cap>2 or ind>2 after Strategy 1)")
-
-                # Summaries
-                def fmt_state(t):
-                    if t is None:
-                        return "n/a"
-                    i, c, swr = t
-                    return f"ind={i:3d} cap={c:3d} SWR={fmt_swr(swr)}"
-
-                print("      Summary:")
-                print(f"        After Strategy 1: {fmt_state(best_after_strat1)}")
-                print(f"        After Strategy 2: {fmt_state(best_after_strat2)}")
-                print(f"        After Strategy 3: {fmt_state(best_after_strat3)}")
-
-            coarse_debug(0)
-            coarse_debug(1)
+    if return_last_sim:
+        return last_sim
+    return None
 
 
 def main() -> None:
-    run_table(TABLE1, "Cebik Table 1 - Free-space 88' doublet")
-    run_table(TABLE3, "Cebik Table 3 - 70 ft high 88' doublet")
+    parser = argparse.ArgumentParser(
+        description="Evaluate ATU-10 firmware tuning on the Cebik 88' doublet tables."
+    )
+    parser.add_argument(
+        "--list-flags",
+        action="store_true",
+        help="List available SimFlags, show defaults, and exit.",
+    )
+    parser.add_argument(
+        "--force-all-coarse-strategies",
+        action="store_true",
+        help="Always run coarse strategies 2/3 (default matches firmware gating).",
+    )
+    parser.add_argument(
+        "--debug-coarse",
+        action="store_true",
+        help="Print coarse tuning step-by-step details from the simulator.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("plots"),
+        help="Directory to write SWR grid PNGs (default: ./plots).",
+    )
+    parser.add_argument(
+        "--skip-plots",
+        action="store_true",
+        help="Skip generating SWR grid PNGs.",
+    )
+    args = parser.parse_args()
+
+    if args.list_flags:
+        defaults = SimFlags()
+        print("Available SimFlags (defaults in brackets):")
+        print(
+            f"  force_all_coarse_strategies [{defaults.force_all_coarse_strategies}] - "
+            "always run coarse strategies 2/3 even if gated."
+        )
+        print(
+            f"  debug_coarse [{defaults.debug_coarse}] - "
+            "emit coarse tuning step-by-step debug logs."
+        )
+        print(
+            f"  trace_steps [{defaults.trace_steps}] - "
+            "record every relay-set step (for plotting the tuning path)."
+        )
+        return
+
+    flags = SimFlags(
+        force_all_coarse_strategies=args.force_all_coarse_strategies,
+        debug_coarse=args.debug_coarse,
+    )
+    default_flags = SimFlags()
+    run_table(TABLE1, "Cebik Table 1 - Free-space 88' doublet", default_flags)
+    run_table(TABLE3, "Cebik Table 3 - 70 ft high 88' doublet", default_flags)
+
+    detailed_label = "7.0 MHz (70 ft)"
+    detailed_entry = next(item for item in TABLE3 if item[0] == detailed_label)
+    analysis_flags = SimFlags(
+        force_all_coarse_strategies=args.force_all_coarse_strategies,
+        debug_coarse=args.debug_coarse,
+        trace_steps=True,
+    )
+    sim_detail = run_table(
+        [detailed_entry],
+        "Detailed analysis - 7.0 MHz (70 ft)",
+        analysis_flags,
+        return_last_sim=True,
+    )
+
+    if args.skip_plots:
+        return
+
+    out_dir = args.output_dir
+    plotting_flags = SimFlags(
+        force_all_coarse_strategies=args.force_all_coarse_strategies,
+        debug_coarse=args.debug_coarse,
+        trace_steps=True,
+    )
+    print("Generating SWR grid PNGs for all table entries...")
+    for label, freq, zL in TABLE1 + TABLE3:
+        sim_plot = TunerSim(freq_hz=freq, z_load=zL, flags=plotting_flags)
+        sim_plot.atu_reset()
+        sim_plot.tune()
+        grids = swr_grid(freq, zL)
+        trace = sim_plot.trace
+        path0 = plot_swr_grid(grids[0], label, 0, out_dir, trace=trace)
+        path1 = plot_swr_grid(grids[1], label, 1, out_dir, trace=trace)
+        print(f"  {label}: {path0}, {path1}")
 
 
 if __name__ == "__main__":
