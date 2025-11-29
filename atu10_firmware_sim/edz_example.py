@@ -51,6 +51,8 @@ def plot_swr_grid(
     sw: int,
     out_dir: Path,
     trace: list[dict] | None = None,
+    final_state: tuple[int, int] | None = None,
+    coarse_best: tuple[int, int] | None = None,
 ) -> Path:
     """
     Render a 128x128 SWR grid to a PNG file using matplotlib.
@@ -120,9 +122,21 @@ def plot_swr_grid(
 
     if trace:
         trace_sw = [t for t in trace if t["SW"] == sw]
-        coarse_pts = [(t["cap"], t["ind"]) for t in trace_sw if t["phase"].startswith("coarse")]
-        sharp_pts = [(t["cap"], t["ind"]) for t in trace_sw if t["phase"].startswith("sharp")]
-        start_pts = [(t["cap"], t["ind"]) for t in trace_sw if t["phase"] in ("reset", "tune_start")]
+        coarse_pts = [
+            (t["cap"], t["ind"])
+            for t in trace_sw
+            if "coarse" in t["phase"]
+        ]
+        start_pts = [
+            (t["cap"], t["ind"])
+            for t in trace_sw
+            if t["phase"] in ("reset", "tune_start", "bg_start")
+        ]
+        sharp_pts = [
+            (t["cap"], t["ind"])
+            for t in trace_sw
+            if "coarse" not in t["phase"] and t["phase"] not in ("reset", "tune_start", "bg_start")
+        ]
 
         if coarse_pts:
             ax.scatter(
@@ -133,6 +147,17 @@ def plot_swr_grid(
                 s=14,
                 label="coarse steps",
                 alpha=0.8,
+            )
+        if coarse_best:
+            ax.scatter(
+                coarse_best[0],
+                coarse_best[1],
+                marker="^",
+                color="gold",
+                edgecolors="black",
+                s=40,
+                label="best coarse",
+                zorder=5,
             )
         if sharp_pts:
             ax.scatter(
@@ -162,6 +187,17 @@ def plot_swr_grid(
                 s=20,
                 label="start/reset",
                 alpha=0.8,
+            )
+        if final_state:
+            ax.scatter(
+                final_state[0],
+                final_state[1],
+                marker="*",
+                color="red",
+                edgecolors="black",
+                s=80,
+                label="final",
+                zorder=6,
             )
 
         if coarse_pts or sharp_pts or start_pts:
@@ -492,8 +528,43 @@ def main() -> None:
         sim_plot.tune()
         grids = swr_grid(freq, zL)
         trace = sim_plot.trace
-        path0 = plot_swr_grid(grids[0], label, 0, out_dir, trace=trace)
-        path1 = plot_swr_grid(grids[1], label, 1, out_dir, trace=trace)
+        final_state_sw0 = (
+            (sim_plot.cap, sim_plot.ind) if sim_plot.SW == 0 else None
+        )
+        final_state_sw1 = (
+            (sim_plot.cap, sim_plot.ind) if sim_plot.SW == 1 else None
+        )
+        coarse_best = None
+        # best coarse was logged as bg_coarse_best; find it
+        for t in trace:
+            if t["phase"] == "bg_coarse_best":
+                cb = (t["cap"], t["ind"])
+                if t["SW"] == 0:
+                    coarse_best = ("sw0", cb)
+                else:
+                    coarse_best = ("sw1", cb)
+                break
+        coarse_best_sw0 = coarse_best[1] if coarse_best and coarse_best[0] == "sw0" else None
+        coarse_best_sw1 = coarse_best[1] if coarse_best and coarse_best[0] == "sw1" else None
+
+        path0 = plot_swr_grid(
+            grids[0],
+            label,
+            0,
+            out_dir,
+            trace=trace,
+            final_state=final_state_sw0,
+            coarse_best=coarse_best_sw0,
+        )
+        path1 = plot_swr_grid(
+            grids[1],
+            label,
+            1,
+            out_dir,
+            trace=trace,
+            final_state=final_state_sw1,
+            coarse_best=coarse_best_sw1,
+        )
         print(f"  {label}: {path0}, {path1}")
 
 

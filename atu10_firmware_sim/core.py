@@ -711,10 +711,8 @@ class TunerSim:
         for sw in (0, 1):
             for ind in ind_candidates:
                 for cap in cap_candidates:
-                    if sw == 0:
-                        swr = self._bg_eval_swr(sw, ind, cap)
-                    else:
-                        swr = self._bg_eval_swr(sw, ind, cap)
+                    self._bg_apply_state(sw, ind if sw == 0 else cap, cap if sw == 0 else ind, "bg_coarse_eval")
+                    swr = self.SWR
                     if swr < best_swr:
                         best_swr = swr
                         best_sw = sw
