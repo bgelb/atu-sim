@@ -78,6 +78,20 @@ settings. Current knobs:
   example to overlay the tuning path on the SWR heatmaps).
 - `algorithm`: `"bg"` (default improved search) or `"atu10"` (firmware-faithful).
 
+## BG tuning algorithm (default)
+
+1) Coarse grid: evaluate a sparse LC grid for both topologies (SW=0 and SW=1);
+   pick the best coarse point per topology (<9.99 SWR) and keep both if valid.
+2) Primary walk: starting from the coarse winner, walk the primary axis
+   (L for SW=0, C for SW=1) step-by-step until SWR worsens by >0.2.
+3) Secondary neighbors: walk immediate neighbors of the secondary axis
+   (C for SW=0, L for SW=1) one-by-one in both directions, each time doing a
+   primary walk to find the best for that neighbor. Expand outward until no
+   neighbor improves the global best.
+4) Choose the best refined result across SW=0/1. The plots show coarse best
+   (gold triangle), per-secondary bests (pink diamonds), and the final result
+   (red star), along with the path.
+
 ## SWR grids
 
 `swr_grid()` produces a 128x128 SWR map for each topology (SW=0 and SW=1),
