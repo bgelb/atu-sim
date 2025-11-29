@@ -638,11 +638,12 @@ class TunerSim:
         global_best = best_swr
         best_p = primary_best
         best_s = secondary_best
+        center = best_s
 
         while True:
             improved = False
             for sign in (-1, 1):
-                s_candidate = secondary_best + sign * offset
+                s_candidate = center + sign * offset
                 if s_candidate < 0 or s_candidate > 127:
                     continue
 
@@ -675,19 +676,20 @@ class TunerSim:
                 p_best_local, swr_local = self._bg_walk_primary(
                     sw, p_start, s_candidate, self.SWR, "bg_sec_walk"
                 )
+                # Apply/log best for this secondary
+                self._bg_apply_state(sw, p_best_local, s_candidate, "bg_sec_best")
                 if swr_local < global_best:
                     global_best = swr_local
                     best_p = p_best_local
                     best_s = s_candidate
                     improved = True
+                    center = best_s
 
             if not improved:
                 break
-            secondary_best = best_s
-            primary_best = best_p
-            offset += 1
+            offset = 1  # reset to immediate neighbors around new center
 
-        self._bg_apply_state(sw, best_p, best_s, "bg_final_best")
+        self._bg_apply_state(sw, best_p, best_s, "bg_final_candidate")
         return best_p, best_s, global_best
 
     def _tune_bg(self) -> None:
@@ -702,42 +704,63 @@ class TunerSim:
         ind_candidates = [0, 15, 31, 63, 95, 111, 127]
         cap_candidates = [0, 1, 2, 3, 5, 7, 9, 11, 15, 19, 23, 27, 43, 59, 75, 91]
 
-        best_overall: tuple[int, int, int] | None = None  # (swr, primary, secondary, sw)
-        best_sw = 0
-        best_primary = 0
-        best_secondary = 0
-        best_swr = 999
+        best_primary_sw0 = best_secondary_sw0 = None
+        best_primary_sw1 = best_secondary_sw1 = None
+        best_swr_sw0 = best_swr_sw1 = 999
 
         for sw in (0, 1):
             for ind in ind_candidates:
                 for cap in cap_candidates:
                     self._bg_apply_state(sw, ind if sw == 0 else cap, cap if sw == 0 else ind, "bg_coarse_eval")
                     swr = self.SWR
-                    if swr < best_swr:
-                        best_swr = swr
-                        best_sw = sw
-                        best_primary = ind if sw == 0 else cap
-                        best_secondary = cap if sw == 0 else ind
-                        best_overall = (swr, best_primary, best_secondary, best_sw)
-        if best_overall is None:
+                    if sw == 0:
+                        if swr < best_swr_sw0:
+                            best_swr_sw0 = swr
+                            best_primary_sw0 = ind
+                            best_secondary_sw0 = cap
+                    else:
+                        if swr < best_swr_sw1:
+                            best_swr_sw1 = swr
+                            best_primary_sw1 = cap
+                            best_secondary_sw1 = ind
+
+        coarse_results = []
+        # Log coarse best per topology
+        for sw_val, p_val, s_val, swr_val in (
+            (0, best_primary_sw0, best_secondary_sw0, best_swr_sw0),
+            (1, best_primary_sw1, best_secondary_sw1, best_swr_sw1),
+        ):
+            if p_val is not None and s_val is not None:
+                self._bg_apply_state(sw_val, p_val, s_val, "bg_coarse_best")
+                coarse_results.append((sw_val, p_val, s_val, swr_val))
+
+        # Refine for any sw with coarse < 999
+        refined_results = []
+        for sw_val, p_val, s_val, swr_val in coarse_results:
+            if swr_val >= 999:
+                continue
+            self._bg_apply_state(sw_val, p_val, s_val, "bg_refine_start")
+            p_best, swr_best = self._bg_walk_primary(
+                sw_val, p_val, s_val, swr_val, "bg_primary"
+            )
+            p_best, s_best, swr_best = self._bg_search_secondary(
+                sw_val, p_best, s_val, swr_best
+            )
+            refined_results.append((swr_best, sw_val, p_best, s_best))
+
+        if refined_results:
+            refined_results.sort(key=lambda x: x[0])
+            best = refined_results[0]
+            _, sw_final, p_final, s_final = best
+            self._bg_apply_state(sw_final, p_final, s_final, "bg_final_best")
+        elif coarse_results:
+            # choose best coarse if no refinement possible
+            coarse_results.sort(key=lambda x: x[3])
+            sw_final, p_final, s_final, _ = coarse_results[0]
+            self._bg_apply_state(sw_final, p_final, s_final, "bg_final_best")
+        else:
             self.atu_reset()
-            return
 
-        # Apply best coarse state
-        self._bg_apply_state(best_sw, best_primary, best_secondary, "bg_coarse_best")
-        best_swr = self.SWR
-
-        # Primary walk
-        best_primary, best_swr = self._bg_walk_primary(
-            best_sw, best_primary, best_secondary, best_swr, "bg_primary"
-        )
-
-        # Secondary exploration with primary walks
-        best_primary, best_secondary, best_swr = self._bg_search_secondary(
-            best_sw, best_primary, best_secondary, best_swr
-        )
-
-        # Final state already applied in _bg_search_secondary
         self._trace("bg_end")
 
 

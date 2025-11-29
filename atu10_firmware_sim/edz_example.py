@@ -53,6 +53,7 @@ def plot_swr_grid(
     trace: list[dict] | None = None,
     final_state: tuple[int, int] | None = None,
     coarse_best: tuple[int, int] | None = None,
+    per_secondary: list[tuple[int, int]] | None = None,
 ) -> Path:
     """
     Render a 128x128 SWR grid to a PNG file using matplotlib.
@@ -177,6 +178,18 @@ def plot_swr_grid(
                     xytext=(x0, y0),
                     arrowprops=dict(arrowstyle="->", color="black", lw=0.8),
                 )
+        if per_secondary:
+            ax.scatter(
+                [p[0] for p in per_secondary],
+                [p[1] for p in per_secondary],
+                marker="D",
+                color="#ff69b4",
+                edgecolors="black",
+                s=26,
+                label="best per secondary",
+                alpha=0.9,
+                zorder=5,
+            )
         if start_pts:
             ax.scatter(
                 [p[0] for p in start_pts],
@@ -535,7 +548,8 @@ def main() -> None:
             (sim_plot.cap, sim_plot.ind) if sim_plot.SW == 1 else None
         )
         coarse_best = None
-        # best coarse was logged as bg_coarse_best; find it
+        per_secondary_sw0: list[tuple[int, int]] = []
+        per_secondary_sw1: list[tuple[int, int]] = []
         for t in trace:
             if t["phase"] == "bg_coarse_best":
                 cb = (t["cap"], t["ind"])
@@ -543,7 +557,11 @@ def main() -> None:
                     coarse_best = ("sw0", cb)
                 else:
                     coarse_best = ("sw1", cb)
-                break
+            if t["phase"] == "bg_sec_best":
+                if t["SW"] == 0:
+                    per_secondary_sw0.append((t["cap"], t["ind"]))
+                else:
+                    per_secondary_sw1.append((t["cap"], t["ind"]))
         coarse_best_sw0 = coarse_best[1] if coarse_best and coarse_best[0] == "sw0" else None
         coarse_best_sw1 = coarse_best[1] if coarse_best and coarse_best[0] == "sw1" else None
 
@@ -555,6 +573,7 @@ def main() -> None:
             trace=trace,
             final_state=final_state_sw0,
             coarse_best=coarse_best_sw0,
+            per_secondary=per_secondary_sw0,
         )
         path1 = plot_swr_grid(
             grids[1],
@@ -564,6 +583,7 @@ def main() -> None:
             trace=trace,
             final_state=final_state_sw1,
             coarse_best=coarse_best_sw1,
+            per_secondary=per_secondary_sw1,
         )
         print(f"  {label}: {path0}, {path1}")
 
