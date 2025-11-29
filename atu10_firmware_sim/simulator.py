@@ -81,16 +81,8 @@ class ATUSimulator:
                     )
                 )
             final_topo = legacy_result.final_config.topology
-            z_in_final = self.bank.input_impedance(
-                freq_hz,
-                z_load,
-                legacy_result.final_config.l_bits,
-                legacy_result.final_config.c_bits,
-                ShuntPosition.LOAD
-                if final_topo == Topology.SHUNT_AT_LOAD
-                else ShuntPosition.SOURCE,
-            )
-            detector_out = self.detector.measure(z_in_final)
+            z_in_final = trace_entries[-1].z_in if trace_entries else z_load
+            detector_out = trace_entries[-1].detector_output if trace_entries else self.detector.measure(z_in_final)
             return TuneResult(
                 final_config=legacy_result.final_config,
                 final_z_in=z_in_final,

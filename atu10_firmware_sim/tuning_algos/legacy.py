@@ -5,7 +5,7 @@ from typing import Any
 
 from ..detectors import Detector
 from ..lc_bank import LCBank, ShuntPosition
-from ..core import TunerSim, SimFlags, l_network_input_impedance  # reuse legacy
+from ..core import TunerSim, SimFlags, l_network_input_impedance, LCBank as LegacyBank
 from .base import TuningAlgo, TuningConfig, Topology
 
 
@@ -34,6 +34,7 @@ class LegacyBGAlgo(TuningAlgo):
         if len(bank.l_values) != 7 or len(bank.c_values) != 7:
             raise AssertionError("Legacy BG algo currently expects 7 L and 7 C relays")
         self.bank = bank
+        self._legacy_bank = LegacyBank(l_values=bank.l_values, c_values=bank.c_values)
         self._config = TuningConfig(0, 1, Topology.SHUNT_AT_LOAD)
         self._done = False
 
@@ -55,6 +56,7 @@ class LegacyBGAlgo(TuningAlgo):
         sim = TunerSim(
             freq_hz=freq_hz,
             z_load=z_load,
+            bank=self._legacy_bank,
             flags=SimFlags(algorithm="bg", trace_steps=True),
         )
         sim.atu_reset()
@@ -107,6 +109,7 @@ class LegacyATU10Algo(LegacyBGAlgo):
         sim = TunerSim(
             freq_hz=freq_hz,
             z_load=z_load,
+            bank=self._legacy_bank,
             flags=SimFlags(algorithm="atu10", trace_steps=True),
         )
         sim.atu_reset()
