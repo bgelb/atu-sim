@@ -38,36 +38,24 @@ class SimFlags:
 @dataclass
 class LCBank:
     l_values: tuple[float, ...] = (
-        0.10e-6,
         0.22e-6,
         0.45e-6,
         1.0e-6,
         2.2e-6,
         4.5e-6,
         10.0e-6,
-        #22.0e-6,
+        22.0e-6,
     )
     # ATU10 values
     c_values: tuple[float, ...] = (
+        10e-12,
         22e-12,
         47e-12,
         100e-12,
         220e-12,
         470e-12,
         1.0e-9,
-        2.2e-9,
     )
-    # T1 values
-    #c_values: tuple[float, ...] = (
-    #    10e-12,
-    #    20e-12,
-    #    39e-12,
-    #    82e-12,
-    #    160e-12,
-    #    330e-12,
-    #    660e-12,
-    #)
-    
 
     def l_from_bits(self, bits: int) -> float:
         return sum(v for i, v in enumerate(self.l_values) if bits & (1 << i))
