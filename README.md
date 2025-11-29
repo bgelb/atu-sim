@@ -66,6 +66,18 @@ python -m atu10_firmware_sim.edz_example --algorithm atu10
 
 # Run regression tests (uses current default BG and reference ATU-10 algos)
 pytest
+
+## New architecture (in progress)
+
+Core pieces now being factored for a general relay-switched L-network tuner:
+
+- `LCBank`: parameterized inductor/capacitor relay bank with impedance/SWR helpers.
+- `Detector`: converts input impedance to a metric (e.g., `ATU10IntegerVSWRDetector`).
+- `TuningAlgo`: pluggable tuning strategies (legacy ATU-10, BG wrappers for now).
+- `ATUSimulator`: orchestrates bank + detector + tuning algorithm and emits a trace.
+- `Plot` helpers: reuse the simulator trace to overlay tuning paths on SWR grids.
+
+Existing examples still run, and regression tests guard BG/ATU-10 final SWR.
 ```
 
 ## Simulation flags
