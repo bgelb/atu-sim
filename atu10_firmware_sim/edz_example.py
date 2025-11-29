@@ -426,6 +426,12 @@ def main() -> None:
         action="store_true",
         help="Skip generating SWR grid PNGs.",
     )
+    parser.add_argument(
+        "--algorithm",
+        choices=["bg", "atu10"],
+        default="bg",
+        help="Tuning algorithm to use (default: bg).",
+    )
     args = parser.parse_args()
 
     if args.list_flags:
@@ -448,8 +454,9 @@ def main() -> None:
     flags = SimFlags(
         force_all_coarse_strategies=args.force_all_coarse_strategies,
         debug_coarse=args.debug_coarse,
+        algorithm=args.algorithm,
     )
-    default_flags = SimFlags()
+    default_flags = SimFlags(algorithm=args.algorithm)
     run_table(TABLE1, "Cebik Table 1 - Free-space 88' doublet", default_flags)
     run_table(TABLE3, "Cebik Table 3 - 70 ft high 88' doublet", default_flags)
 
@@ -459,6 +466,7 @@ def main() -> None:
         force_all_coarse_strategies=args.force_all_coarse_strategies,
         debug_coarse=args.debug_coarse,
         trace_steps=True,
+        algorithm=args.algorithm,
     )
     sim_detail = run_table(
         [detailed_entry],
@@ -475,6 +483,7 @@ def main() -> None:
         force_all_coarse_strategies=args.force_all_coarse_strategies,
         debug_coarse=args.debug_coarse,
         trace_steps=True,
+        algorithm=args.algorithm,
     )
     print("Generating SWR grid PNGs for all table entries...")
     for label, freq, zL in TABLE1 + TABLE3:

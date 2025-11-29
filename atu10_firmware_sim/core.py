@@ -22,11 +22,17 @@ class SimFlags:
     trace_steps:
         If True, record every relay-set step (phase, SW, ind, cap, SWR) for
         later plotting or analysis.
+
+    algorithm:
+        Select tuning algorithm. "bg" (default) is the improved search
+        described in the README; "atu10" preserves the firmware-faithful
+        behavior.
     """
 
     force_all_coarse_strategies: bool = False
     debug_coarse: bool = False
     trace_steps: bool = False
+    algorithm: str = "bg"
 
 
 @dataclass
@@ -522,6 +528,11 @@ class TunerSim:
         self.sharp_tune()
 
     def tune(self) -> None:
+        if self.flags.algorithm == "atu10":
+            return self._tune_atu10()
+        return self._tune_bg()
+
+    def _tune_atu10(self) -> None:
         if self.flags.trace_steps:
             self.trace.clear()
             self._trace_step = 0
@@ -561,6 +572,175 @@ class TunerSim:
 
         if self.SWR == 999:
             self.atu_reset()
+
+    def _bg_apply_state(self, sw: int, primary: int, secondary: int, phase: str) -> None:
+        """
+        Helper to set relays with a primary/secondary axis abstraction.
+        For sw=0: primary=L(ind), secondary=C(cap).
+        For sw=1: primary=C(cap), secondary=L(ind).
+        """
+        if sw == 0:
+            self.relay_set(ind=primary, cap=secondary, SW=sw, phase=phase)
+        else:
+            self.relay_set(ind=secondary, cap=primary, SW=sw, phase=phase)
+
+    def _bg_eval_swr(self, sw: int, primary: int, secondary: int) -> int:
+        if sw == 0:
+            z_in = l_network_input_impedance(self.freq_hz, self.z_load, primary, secondary, sw, self.bank)
+        else:
+            z_in = l_network_input_impedance(self.freq_hz, self.z_load, secondary, primary, sw, self.bank)
+        return swr_from_z(z_in, self.z0)
+
+    def _bg_walk_primary(
+        self, sw: int, primary_start: int, secondary: int, best_swr: int, phase_prefix: str
+    ) -> tuple[int, int]:
+        """
+        Walk primary axis (L for sw=0, C for sw=1) up/down by 1 until SWR worsens by >0.2.
+        Returns (best_primary, best_swr).
+        """
+        best_primary = primary_start
+        best_val = best_swr
+
+        # Increase direction
+        p = primary_start
+        while p < 127:
+            p += 1
+            self._bg_apply_state(sw, p, secondary, f"{phase_prefix}_inc")
+            swr = self.SWR
+            if swr < best_val:
+                best_val = swr
+                best_primary = p
+            elif swr > best_val + 20:
+                break
+
+        # Decrease direction
+        p = primary_start
+        while p > 0:
+            p -= 1
+            self._bg_apply_state(sw, p, secondary, f"{phase_prefix}_dec")
+            swr = self.SWR
+            if swr < best_val:
+                best_val = swr
+                best_primary = p
+            elif swr > best_val + 20:
+                break
+
+        self._bg_apply_state(sw, best_primary, secondary, f"{phase_prefix}_best")
+        return best_primary, best_val
+
+    def _bg_search_secondary(
+        self, sw: int, primary_best: int, secondary_best: int, best_swr: int
+    ) -> tuple[int, int, int]:
+        """
+        Explore neighboring secondary values with primary walks.
+        """
+        offset = 1
+        global_best = best_swr
+        best_p = primary_best
+        best_s = secondary_best
+
+        while True:
+            improved = False
+            for sign in (-1, 1):
+                s_candidate = secondary_best + sign * offset
+                if s_candidate < 0 or s_candidate > 127:
+                    continue
+
+                # Start from best primary found so far
+                self._bg_apply_state(sw, best_p, s_candidate, "bg_sec_start")
+                start_swr = self.SWR
+                p_start = best_p
+
+                if start_swr >= 900:
+                    found = False
+                    for radius in range(2, 128, 2):
+                        candidates = []
+                        if p_start - radius >= 0:
+                            candidates.append(p_start - radius)
+                        if p_start + radius <= 127:
+                            candidates.append(p_start + radius)
+                        best_trial: tuple[int, int] | None = None
+                        for p in candidates:
+                            self._bg_apply_state(sw, p, s_candidate, "bg_sec_probe")
+                            swr_try = self.SWR
+                            if swr_try < 900:
+                                if best_trial is None or swr_try < best_trial[1]:
+                                    best_trial = (p, swr_try)
+                                found = True
+                        if found and best_trial is not None:
+                            p_start = best_trial[0]
+                            self._bg_apply_state(sw, p_start, s_candidate, "bg_sec_seed")
+                            break
+
+                p_best_local, swr_local = self._bg_walk_primary(
+                    sw, p_start, s_candidate, self.SWR, "bg_sec_walk"
+                )
+                if swr_local < global_best:
+                    global_best = swr_local
+                    best_p = p_best_local
+                    best_s = s_candidate
+                    improved = True
+
+            if not improved:
+                break
+            secondary_best = best_s
+            primary_best = best_p
+            offset += 1
+
+        self._bg_apply_state(sw, best_p, best_s, "bg_final_best")
+        return best_p, best_s, global_best
+
+    def _tune_bg(self) -> None:
+        # Clear trace if needed
+        if self.flags.trace_steps:
+            self.trace.clear()
+            self._trace_step = 0
+
+        self.get_swr()
+        self._trace("bg_start")
+
+        ind_candidates = [0, 15, 31, 63, 95, 111, 127]
+        cap_candidates = [0, 1, 2, 3, 5, 7, 9, 11, 15, 19, 23, 27, 43, 59, 75, 91]
+
+        best_overall: tuple[int, int, int] | None = None  # (swr, primary, secondary, sw)
+        best_sw = 0
+        best_primary = 0
+        best_secondary = 0
+        best_swr = 999
+
+        for sw in (0, 1):
+            for ind in ind_candidates:
+                for cap in cap_candidates:
+                    if sw == 0:
+                        swr = self._bg_eval_swr(sw, ind, cap)
+                    else:
+                        swr = self._bg_eval_swr(sw, ind, cap)
+                    if swr < best_swr:
+                        best_swr = swr
+                        best_sw = sw
+                        best_primary = ind if sw == 0 else cap
+                        best_secondary = cap if sw == 0 else ind
+                        best_overall = (swr, best_primary, best_secondary, best_sw)
+        if best_overall is None:
+            self.atu_reset()
+            return
+
+        # Apply best coarse state
+        self._bg_apply_state(best_sw, best_primary, best_secondary, "bg_coarse_best")
+        best_swr = self.SWR
+
+        # Primary walk
+        best_primary, best_swr = self._bg_walk_primary(
+            best_sw, best_primary, best_secondary, best_swr, "bg_primary"
+        )
+
+        # Secondary exploration with primary walks
+        best_primary, best_secondary, best_swr = self._bg_search_secondary(
+            best_sw, best_primary, best_secondary, best_swr
+        )
+
+        # Final state already applied in _bg_search_secondary
+        self._trace("bg_end")
 
 
 def brute_force_best(

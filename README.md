@@ -41,6 +41,7 @@ Each row includes:
 - The best SWR the LC bank could achieve (brute-force search)
 - The SWR that the **actual firmware algorithm** converges to
 - The final relay state (inductor and capacitor bitmasks, topology)
+- SWR grid PNGs for both topologies with the tuning path overlaid
 
 CLI toggles (see `-h` for the full list):
 
@@ -59,6 +60,9 @@ python -m atu10_firmware_sim.edz_example --output-dir /tmp/atu-plots
 
 # Skip PNG generation entirely
 python -m atu10_firmware_sim.edz_example --skip-plots
+
+# Use the reference ATU-10 firmware algorithm instead of the BG search
+python -m atu10_firmware_sim.edz_example --algorithm atu10
 ```
 
 ## Simulation flags
@@ -72,6 +76,7 @@ settings. Current knobs:
   simulator (off by default).
 - `trace_steps`: Record every relay-set step with SW/ind/cap/SWR (used by the
   example to overlay the tuning path on the SWR heatmaps).
+- `algorithm`: `"bg"` (default improved search) or `"atu10"` (firmware-faithful).
 
 ## SWR grids
 
@@ -80,4 +85,4 @@ covering every inductor/capacitor bitmask combination. The example prints
 these as PNG heatmaps for every table entry. Rows are inductor bitmasks,
 columns are capacitor bitmasks; color buckets correspond to
 <1.2, <1.3, <1.4, <1.5, <1.7, <2, <2.5, <3, <4, <5, <6.5, <8, <9.5, and ≥9.5
-SWR. The tuning path (coarse vs. sharp steps) is overlaid on each plot.
+SWR (light gray). The tuning path (coarse vs. sharp steps) is overlaid on each plot.
