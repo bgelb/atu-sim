@@ -51,7 +51,7 @@ pytest
 
 Core pieces for a general relay-switched L-network tuner:
 
-- `LCBank` (`atu10_firmware_sim/lc_bank.py`): parameterized inductor/capacitor relay
+- `LCBank` (`atu_sim/lc_bank.py`): parameterized inductor/capacitor relay
   bank with impedance helpers (`atu10_bank()` builds the ATU-10 values).
 - `Detector` (`detectors.py`): converts input impedance to a metric
   (e.g., `ATU10IntegerVSWRDetector` with the ATU-10 integer SWR quantizer).

@@ -3,15 +3,15 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from atu10_firmware_sim.cebik_tables import TABLE1, TABLE3
-from atu10_firmware_sim.detectors import ATU10IntegerVSWRDetector
-from atu10_firmware_sim.hardware import atu10_bank
-from atu10_firmware_sim.lc_bank import ShuntPosition
-from atu10_firmware_sim.plotting import fmt_swr, new_plot, overlay_trace, plot_vswr_map, save_plot
-from atu10_firmware_sim.simulator import ATUSimulator
-from atu10_firmware_sim.tuning_algos.atu10_reference import ATU10ReferenceAlgo
-from atu10_firmware_sim.tuning_algos.bg_algo import BGAlgo
-from atu10_firmware_sim.tuning_algos.types import Topology
+from atu_sim.cebik_tables import TABLE1, TABLE3
+from atu_sim.detectors import ATU10IntegerVSWRDetector
+from atu_sim.hardware import atu10_bank
+from atu_sim.lc_bank import ShuntPosition
+from atu_sim.plotting import fmt_swr, new_plot, overlay_trace, plot_vswr_map, save_plot
+from atu_sim.simulator import ATUSimulator
+from atu_sim.tuning_algos.atu10_reference import ATU10ReferenceAlgo
+from atu_sim.tuning_algos.bg_algo import BGAlgo
+from atu_sim.tuning_algos.types import Topology
 
 
 def _build_algo(name: str, bank, detector):
