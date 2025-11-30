@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from atu_sim.cebik_tables import TABLE3
+from examples.edz_example.cebik_tables import TABLE3
 from atu_sim.detectors import ATU10IntegerVSWRDetector
 from atu_sim.hardware import atu10_bank, atu10_bank_alt
 from atu_sim.lc_bank import LCBank, ShuntPosition

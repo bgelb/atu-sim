@@ -5,7 +5,6 @@ from .simulator import ATUSimulator, TuneResult, TuneTraceEntry
 from .tuning_algos.atu10_reference import ATU10ReferenceAlgo
 from .tuning_algos.bg_algo import BGAlgo
 from .tuning_algos.types import Topology, TuningConfig
-from .cebik_tables import TABLE1, TABLE3
 
 __all__ = [
     "LCBank",
@@ -19,6 +18,4 @@ __all__ = [
     "BGAlgo",
     "Topology",
     "TuningConfig",
-    "TABLE1",
-    "TABLE3",
 ]

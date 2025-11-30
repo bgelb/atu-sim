@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from atu_sim.cebik_tables import TABLE1, TABLE3
+from examples.edz_example.cebik_tables import TABLE1, TABLE3
 from atu_sim.hardware import atu10_bank_alt
 from atu_sim.detectors import ATU10IntegerVSWRDetector
 from atu_sim.simulator import ATUSimulator
