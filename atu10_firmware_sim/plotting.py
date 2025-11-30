@@ -6,7 +6,7 @@ from typing import Iterable, Sequence
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .tuning_algos.types import Topology
+from .tuning_algos.types import Topology, TuningPhase
 
 # Color scale shared by VSWR maps
 _BOUNDS = [
@@ -92,23 +92,25 @@ def overlay_trace(ax, trace: Iterable, sw: int, final_state: tuple[int, int] | N
 
     start_pts = []
     coarse_pts = []
-    sharp_pts = []
+    fine_pts = []
     coarse_best = None
     per_secondary: list[tuple[int, int]] = []
 
     for t in trace_sw:
-        phase = getattr(t, "phase", "")
+        phase = getattr(t, "tuning_phase", None)
+        if phase is None:
+            continue
         point = (t.c_bits, t.l_bits)
-        if phase in ("reset", "tune_start", "bg_start", "coarse_tune_start", "subtune_reset"):
+        if phase in {TuningPhase.RESET, TuningPhase.START, TuningPhase.COARSE_START, TuningPhase.COARSE_RESET}:
             start_pts.append(point)
-        if "coarse" in phase:
+        if phase in {TuningPhase.COARSE_START, TuningPhase.COARSE_STEP, TuningPhase.COARSE_RESET, TuningPhase.COARSE_BEST}:
             coarse_pts.append(point)
-            if phase == "bg_coarse_best":
+            if phase == TuningPhase.COARSE_BEST:
                 coarse_best = point
-        elif "bg_sec_best" in phase:
+        elif phase == TuningPhase.SECONDARY_BEST:
             per_secondary.append(point)
-        else:
-            sharp_pts.append(point)
+        elif phase in {TuningPhase.FINE_START, TuningPhase.FINE_STEP, TuningPhase.FINE_BEST}:
+            fine_pts.append(point)
 
     if coarse_pts:
         ax.scatter(
@@ -155,18 +157,18 @@ def overlay_trace(ax, trace: Iterable, sw: int, final_state: tuple[int, int] | N
             alpha=0.8,
         )
 
-    if sharp_pts:
+    if fine_pts:
         ax.scatter(
-            [p[0] for p in sharp_pts],
-            [p[1] for p in sharp_pts],
+            [p[0] for p in fine_pts],
+            [p[1] for p in fine_pts],
             marker="o",
             color="white",
             edgecolors="black",
             s=18,
-            label="sharp steps",
+            label="fine steps",
             alpha=0.9,
         )
-        for (x0, y0), (x1, y1) in zip(sharp_pts[:-1], sharp_pts[1:]):
+        for (x0, y0), (x1, y1) in zip(fine_pts[:-1], fine_pts[1:]):
             ax.annotate(
                 "",
                 xy=(x1, y1),
@@ -185,7 +187,7 @@ def overlay_trace(ax, trace: Iterable, sw: int, final_state: tuple[int, int] | N
             label="final",
             zorder=6,
         )
-    if coarse_pts or sharp_pts or start_pts or per_secondary or final_state or coarse_best:
+    if coarse_pts or fine_pts or start_pts or per_secondary or final_state or coarse_best:
         ax.legend(loc="upper right")
 
 

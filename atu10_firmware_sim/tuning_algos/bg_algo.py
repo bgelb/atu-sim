@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from ..detectors import ATU10IntegerVSWRDetector, Detector
 from ..lc_bank import LCBank, ShuntPosition
-from .types import AlgoResult, AlgoTrace, Topology, TuningAlgo, TuningConfig
+from .types import AlgoResult, AlgoTrace, Topology, TuningAlgo, TuningConfig, TuningPhase
 
 
 def _topology_from_sw(sw: int) -> Topology:
@@ -47,14 +47,14 @@ class BGAlgo(TuningAlgo):
         )
         self.swr = self.detector.measure(self.z_in)
 
-    def _trace(self, phase: str) -> None:
+    def _trace(self, tuning_phase: TuningPhase) -> None:
         if not self.options.trace_steps:
             return
         self._trace_step += 1
         self.trace.append(
             AlgoTrace(
                 step=self._trace_step,
-                phase=phase,
+                tuning_phase=tuning_phase,
                 topology=_topology_from_sw(self.sw),
                 l_bits=self.ind,
                 c_bits=self.cap,
@@ -68,7 +68,7 @@ class BGAlgo(TuningAlgo):
         ind: int | None = None,
         cap: int | None = None,
         sw: int | None = None,
-        phase: str | None = None,
+        tuning_phase: TuningPhase | None = None,
     ) -> None:
         if ind is not None:
             self.ind = ind
@@ -77,8 +77,8 @@ class BGAlgo(TuningAlgo):
         if sw is not None:
             self.sw = sw
         self._update_measurement()
-        if phase:
-            self._trace(phase)
+        if tuning_phase:
+            self._trace(tuning_phase)
 
     def _prepare_run(self, freq_hz: float, z_load: complex) -> None:
         self.freq_hz = freq_hz
@@ -105,22 +105,22 @@ class BGAlgo(TuningAlgo):
         self.cap = 1
         self.sw = 0
         self._update_measurement()
-        self._trace("reset")
+        self._trace(TuningPhase.RESET)
 
     # ---- BG-specific helpers ----
-    def _bg_apply_state(self, sw: int, primary: int, secondary: int, phase: str) -> None:
+    def _bg_apply_state(self, sw: int, primary: int, secondary: int, tuning_phase: TuningPhase) -> None:
         """
         Helper to set relays with a primary/secondary axis abstraction.
         For sw=0: primary=L(ind), secondary=C(cap).
         For sw=1: primary=C(cap), secondary=L(ind).
         """
         if sw == 0:
-            self._set_state(ind=primary, cap=secondary, sw=sw, phase=phase)
+            self._set_state(ind=primary, cap=secondary, sw=sw, tuning_phase=tuning_phase)
         else:
-            self._set_state(ind=secondary, cap=primary, sw=sw, phase=phase)
+            self._set_state(ind=secondary, cap=primary, sw=sw, tuning_phase=tuning_phase)
 
     def _bg_walk_primary(
-        self, sw: int, primary_start: int, secondary: int, best_swr: int, phase_prefix: str
+        self, sw: int, primary_start: int, secondary: int, best_swr: int
     ) -> tuple[int, int]:
         """
         Walk primary axis (L for sw=0, C for sw=1) up/down by 1 until SWR worsens by >0.2.
@@ -133,7 +133,7 @@ class BGAlgo(TuningAlgo):
         p = primary_start
         while p < 127:
             p += 1
-            self._bg_apply_state(sw, p, secondary, f"{phase_prefix}_inc")
+            self._bg_apply_state(sw, p, secondary, TuningPhase.FINE_STEP)
             swr = self.swr
             if swr < best_val:
                 best_val = swr
@@ -145,7 +145,7 @@ class BGAlgo(TuningAlgo):
         p = primary_start
         while p > 0:
             p -= 1
-            self._bg_apply_state(sw, p, secondary, f"{phase_prefix}_dec")
+            self._bg_apply_state(sw, p, secondary, TuningPhase.FINE_STEP)
             swr = self.swr
             if swr < best_val:
                 best_val = swr
@@ -153,7 +153,7 @@ class BGAlgo(TuningAlgo):
             elif swr > best_val + 20:
                 break
 
-        self._bg_apply_state(sw, best_primary, secondary, f"{phase_prefix}_best")
+        self._bg_apply_state(sw, best_primary, secondary, TuningPhase.FINE_BEST)
         return best_primary, best_val
 
     def _bg_search_secondary(
@@ -176,7 +176,7 @@ class BGAlgo(TuningAlgo):
                     continue
 
                 # Start from best primary found so far
-                self._bg_apply_state(sw, best_p, s_candidate, "bg_sec_start")
+                self._bg_apply_state(sw, best_p, s_candidate, TuningPhase.FINE_START)
                 start_swr = self.swr
                 p_start = best_p
 
@@ -190,7 +190,7 @@ class BGAlgo(TuningAlgo):
                             candidates.append(p_start + radius)
                         best_trial: tuple[int, int] | None = None
                         for p in candidates:
-                            self._bg_apply_state(sw, p, s_candidate, "bg_sec_probe")
+                            self._bg_apply_state(sw, p, s_candidate, TuningPhase.FINE_STEP)
                             swr_try = self.swr
                             if swr_try < 900:
                                 if best_trial is None or swr_try < best_trial[1]:
@@ -198,14 +198,14 @@ class BGAlgo(TuningAlgo):
                                 found = True
                         if found and best_trial is not None:
                             p_start = best_trial[0]
-                            self._bg_apply_state(sw, p_start, s_candidate, "bg_sec_seed")
+                            self._bg_apply_state(sw, p_start, s_candidate, TuningPhase.FINE_STEP)
                             break
 
                 p_best_local, swr_local = self._bg_walk_primary(
-                    sw, p_start, s_candidate, self.swr, "bg_sec_walk"
+                    sw, p_start, s_candidate, self.swr
                 )
                 # Apply/log best for this secondary
-                self._bg_apply_state(sw, p_best_local, s_candidate, "bg_sec_best")
+                self._bg_apply_state(sw, p_best_local, s_candidate, TuningPhase.SECONDARY_BEST)
                 if swr_local < global_best:
                     global_best = swr_local
                     best_p = p_best_local
@@ -217,7 +217,7 @@ class BGAlgo(TuningAlgo):
                 break
             offset = 1  # reset to immediate neighbors around new center
 
-        self._bg_apply_state(sw, best_p, best_s, "bg_final_candidate")
+        self._bg_apply_state(sw, best_p, best_s, TuningPhase.FINAL_CANDIDATE)
         return best_p, best_s, global_best
 
     def _tune_bg(self) -> None:
@@ -227,7 +227,7 @@ class BGAlgo(TuningAlgo):
             self._trace_step = 0
 
         self._update_measurement()
-        self._trace("bg_start")
+        self._trace(TuningPhase.START)
 
         ind_candidates = [0, 16, 32, 48, 64, 80, 96, 112, 127]
         cap_candidates = [0, 1, 2, 3, 5, 7, 9, 11, 15, 19, 23, 27, 43, 59, 75, 91, 123]
@@ -239,7 +239,7 @@ class BGAlgo(TuningAlgo):
         for sw in (0, 1):
             for ind in ind_candidates:
                 for cap in cap_candidates:
-                    self._bg_apply_state(sw, ind if sw == 0 else cap, cap if sw == 0 else ind, "bg_coarse_eval")
+                    self._bg_apply_state(sw, ind if sw == 0 else cap, cap if sw == 0 else ind, TuningPhase.COARSE_STEP)
                     swr = self.swr
                     if sw == 0:
                         if swr < best_swr_sw0:
@@ -259,7 +259,7 @@ class BGAlgo(TuningAlgo):
             (1, best_primary_sw1, best_secondary_sw1, best_swr_sw1),
         ):
             if p_val is not None and s_val is not None:
-                self._bg_apply_state(sw_val, p_val, s_val, "bg_coarse_best")
+                self._bg_apply_state(sw_val, p_val, s_val, TuningPhase.COARSE_BEST)
                 coarse_results.append((sw_val, p_val, s_val, swr_val))
 
         # Refine for any sw with coarse < 999
@@ -267,9 +267,9 @@ class BGAlgo(TuningAlgo):
         for sw_val, p_val, s_val, swr_val in coarse_results:
             if swr_val >= 999:
                 continue
-            self._bg_apply_state(sw_val, p_val, s_val, "bg_refine_start")
+            self._bg_apply_state(sw_val, p_val, s_val, TuningPhase.FINE_START)
             p_best, swr_best = self._bg_walk_primary(
-                sw_val, p_val, s_val, swr_val, "bg_primary"
+                sw_val, p_val, s_val, swr_val
             )
             p_best, s_best, swr_best = self._bg_search_secondary(
                 sw_val, p_best, s_val, swr_best
@@ -280,16 +280,16 @@ class BGAlgo(TuningAlgo):
             refined_results.sort(key=lambda x: x[0])
             best = refined_results[0]
             _, sw_final, p_final, s_final = best
-            self._bg_apply_state(sw_final, p_final, s_final, "bg_final_best")
+            self._bg_apply_state(sw_final, p_final, s_final, TuningPhase.FINAL_BEST)
         elif coarse_results:
             # choose best coarse if no refinement possible
             coarse_results.sort(key=lambda x: x[3])
             sw_final, p_final, s_final, _ = coarse_results[0]
-            self._bg_apply_state(sw_final, p_final, s_final, "bg_final_best")
+            self._bg_apply_state(sw_final, p_final, s_final, TuningPhase.FINAL_BEST)
         else:
             self.atu_reset()
 
-        self._trace("bg_end")
+        self._trace(TuningPhase.FINAL)
 
     # ---- public entrypoint ----
     def run(self, freq_hz: float, z_load: complex) -> AlgoResult:

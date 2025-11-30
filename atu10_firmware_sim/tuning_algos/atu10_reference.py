@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from ..detectors import ATU10IntegerVSWRDetector, Detector
 from ..lc_bank import LCBank, ShuntPosition
-from .types import AlgoResult, AlgoTrace, Topology, TuningAlgo, TuningConfig
+from .types import AlgoResult, AlgoTrace, Topology, TuningAlgo, TuningConfig, TuningPhase
 
 
 def _topology_from_sw(sw: int) -> Topology:
@@ -53,14 +53,14 @@ class ATU10ReferenceAlgo(TuningAlgo):
         )
         self.swr = self.detector.measure(self.z_in)
 
-    def _trace(self, phase: str) -> None:
+    def _trace(self, tuning_phase: TuningPhase) -> None:
         if not self.options.trace_steps:
             return
         self._trace_step += 1
         self.trace.append(
             AlgoTrace(
                 step=self._trace_step,
-                phase=phase,
+                tuning_phase=tuning_phase,
                 topology=_topology_from_sw(self.sw),
                 l_bits=self.ind,
                 c_bits=self.cap,
@@ -74,7 +74,7 @@ class ATU10ReferenceAlgo(TuningAlgo):
         ind: int | None = None,
         cap: int | None = None,
         sw: int | None = None,
-        phase: str | None = None,
+        tuning_phase: TuningPhase | None = None,
     ) -> None:
         if ind is not None:
             self.ind = ind
@@ -83,8 +83,8 @@ class ATU10ReferenceAlgo(TuningAlgo):
         if sw is not None:
             self.sw = sw
         self._update_measurement()
-        if phase:
-            self._trace(phase)
+        if tuning_phase:
+            self._trace(tuning_phase)
 
     def _prepare_run(self, freq_hz: float, z_load: complex) -> None:
         self.freq_hz = freq_hz
@@ -111,7 +111,7 @@ class ATU10ReferenceAlgo(TuningAlgo):
         self.cap = 1
         self.sw = 0
         self._update_measurement()
-        self._trace("reset")
+        self._trace(TuningPhase.RESET)
 
     # ---- ATU-10 helpers ----
     def coarse_cap(self) -> None:
@@ -121,7 +121,7 @@ class ATU10ReferenceAlgo(TuningAlgo):
 
         cap = 1
         while cap < 64:
-            self._set_state(cap=cap, phase="coarse_cap")
+            self._set_state(cap=cap, tuning_phase=TuningPhase.COARSE_STEP)
             swr_scaled = self.swr // 10
             self._dbg(
                 f"        cap step: cap={cap:3d} SWR={self.swr} scaled={swr_scaled}"
@@ -134,7 +134,7 @@ class ATU10ReferenceAlgo(TuningAlgo):
                 break
 
         self.cap = cap_mem
-        self._set_state(cap=self.cap, phase="coarse_cap_final")
+        self._set_state(cap=self.cap, tuning_phase=TuningPhase.COARSE_STEP)
         self._dbg(
             f"        coarse_cap chosen cap={self.cap:3d} SWR={self.swr}"
         )
@@ -146,7 +146,7 @@ class ATU10ReferenceAlgo(TuningAlgo):
 
         ind = 1
         while ind < 64:
-            self._set_state(ind=ind, phase="coarse_ind")
+            self._set_state(ind=ind, tuning_phase=TuningPhase.COARSE_STEP)
             swr_scaled = self.swr // 10
             self._dbg(
                 f"        ind step: ind={ind:3d} SWR={self.swr} scaled={swr_scaled}"
@@ -159,7 +159,7 @@ class ATU10ReferenceAlgo(TuningAlgo):
                 break
 
         self.ind = ind_mem
-        self._set_state(ind=self.ind, phase="coarse_ind_final")
+        self._set_state(ind=self.ind, tuning_phase=TuningPhase.COARSE_STEP)
         self._dbg(
             f"        coarse_ind chosen ind={self.ind:3d} SWR={self.swr}"
         )
@@ -171,7 +171,7 @@ class ATU10ReferenceAlgo(TuningAlgo):
 
         ind = 1
         while ind < 64:
-            self._set_state(ind=ind, cap=ind, phase="coarse_ind_cap")
+            self._set_state(ind=ind, cap=ind, tuning_phase=TuningPhase.COARSE_STEP)
             swr_scaled = self.swr // 10
             self._dbg(
                 f"        ind=cap step: val={ind:3d} SWR={self.swr} scaled={swr_scaled}"
@@ -185,7 +185,7 @@ class ATU10ReferenceAlgo(TuningAlgo):
 
         self.ind = ind_mem
         self.cap = ind_mem
-        self._set_state(ind=self.ind, cap=self.cap, phase="coarse_ind_cap_final")
+        self._set_state(ind=self.ind, cap=self.cap, tuning_phase=TuningPhase.COARSE_STEP)
         self._dbg(
             f"        coarse_ind_cap chosen ind=cap={self.ind:3d} SWR={self.swr}"
         )
@@ -203,7 +203,7 @@ class ATU10ReferenceAlgo(TuningAlgo):
         self._dbg(
             f"    coarse_tune start SW={self.sw} ind={self.ind:3d} cap={self.cap:3d} SWR={self.swr}"
         )
-        self._trace("coarse_tune_start")
+        self._trace(TuningPhase.COARSE_START)
 
         self._dbg("      Strategy 1 (coarse_cap -> coarse_ind):")
         self.coarse_cap()
@@ -228,7 +228,7 @@ class ATU10ReferenceAlgo(TuningAlgo):
             self._dbg("      Strategy 2 (coarse_ind -> coarse_cap):")
             self.ind = 0
             self.cap = 0
-            self._set_state(phase="coarse_strategy2_reset")
+            self._set_state(tuning_phase=TuningPhase.COARSE_RESET)
             self.coarse_ind()
             self.coarse_cap()
             self._update_measurement()
@@ -251,7 +251,7 @@ class ATU10ReferenceAlgo(TuningAlgo):
             self._dbg("      Strategy 3 (coarse_ind_cap):")
             self.ind = 0
             self.cap = 0
-            self._set_state(phase="coarse_strategy3_reset")
+            self._set_state(tuning_phase=TuningPhase.COARSE_RESET)
             self.coarse_ind_cap()
             self._update_measurement()
             if self.swr <= 120:
@@ -300,7 +300,7 @@ class ATU10ReferenceAlgo(TuningAlgo):
         cap_trial = self.cap + step
         if cap_trial > 127:
             cap_trial = 127
-        self._set_state(cap=cap_trial, phase="sharp_cap")
+        self._set_state(cap=cap_trial, tuning_phase=TuningPhase.FINE_STEP)
 
         if self.swr <= swr_mem:
             swr_mem = self.swr
@@ -309,7 +309,7 @@ class ATU10ReferenceAlgo(TuningAlgo):
                 cap_trial = self.cap + step
                 if cap_trial > (127 - step):
                     break
-                self._set_state(cap=cap_trial, phase="sharp_cap")
+                self._set_state(cap=cap_trial, tuning_phase=TuningPhase.FINE_STEP)
                 if self.swr <= swr_mem:
                     cap_mem = self.cap
                     swr_mem = self.swr
@@ -324,7 +324,7 @@ class ATU10ReferenceAlgo(TuningAlgo):
                 cap_trial = self.cap - step
                 if cap_trial < step:
                     break
-                self._set_state(cap=cap_trial, phase="sharp_cap")
+                self._set_state(cap=cap_trial, tuning_phase=TuningPhase.FINE_STEP)
                 if self.swr <= swr_mem:
                     cap_mem = self.cap
                     swr_mem = self.swr
@@ -334,7 +334,7 @@ class ATU10ReferenceAlgo(TuningAlgo):
                 else:
                     break
 
-        self._set_state(cap=cap_mem, phase="sharp_cap_final")
+        self._set_state(cap=cap_mem, tuning_phase=TuningPhase.FINE_BEST)
 
     def sharp_ind(self) -> None:
         ind_mem = self.ind
@@ -348,7 +348,7 @@ class ATU10ReferenceAlgo(TuningAlgo):
         ind_trial = self.ind + step
         if ind_trial > 127:
             ind_trial = 127
-        self._set_state(ind=ind_trial, phase="sharp_ind")
+        self._set_state(ind=ind_trial, tuning_phase=TuningPhase.FINE_STEP)
 
         if self.swr <= swr_mem:
             swr_mem = self.swr
@@ -357,7 +357,7 @@ class ATU10ReferenceAlgo(TuningAlgo):
                 ind_trial = self.ind + step
                 if ind_trial > (127 - step):
                     break
-                self._set_state(ind=ind_trial, phase="sharp_ind")
+                self._set_state(ind=ind_trial, tuning_phase=TuningPhase.FINE_STEP)
                 if self.swr <= swr_mem:
                     ind_mem = self.ind
                     swr_mem = self.swr
@@ -372,7 +372,7 @@ class ATU10ReferenceAlgo(TuningAlgo):
                 ind_trial = self.ind - step
                 if ind_trial < step:
                     break
-                self._set_state(ind=ind_trial, phase="sharp_ind")
+                self._set_state(ind=ind_trial, tuning_phase=TuningPhase.FINE_STEP)
                 if self.swr <= swr_mem:
                     ind_mem = self.ind
                     swr_mem = self.swr
@@ -382,7 +382,7 @@ class ATU10ReferenceAlgo(TuningAlgo):
                 else:
                     break
 
-        self._set_state(ind=ind_mem, phase="sharp_ind_final")
+        self._set_state(ind=ind_mem, tuning_phase=TuningPhase.FINE_BEST)
 
     def sharp_tune(self) -> None:
         if self.cap >= self.ind:
@@ -395,7 +395,7 @@ class ATU10ReferenceAlgo(TuningAlgo):
     def subtune(self) -> None:
         self.ind = 0
         self.cap = 0
-        self._set_state(phase="subtune_reset")
+        self._set_state(tuning_phase=TuningPhase.COARSE_RESET)
         if self.swr <= 120:
             return
 
@@ -412,7 +412,7 @@ class ATU10ReferenceAlgo(TuningAlgo):
             self._trace_step = 0
 
         self._update_measurement()
-        self._trace("tune_start")
+        self._trace(TuningPhase.START)
         if self.swr <= 120:
             return
 
@@ -426,7 +426,7 @@ class ATU10ReferenceAlgo(TuningAlgo):
         ind_mem = self.ind
 
         self.sw = 0 if self.sw == 1 else 1
-        self._trace("toggle_sw")
+        self._trace(TuningPhase.TOPOLOGY_TOGGLE)
         self.subtune()
         self._update_measurement()
 
@@ -434,7 +434,7 @@ class ATU10ReferenceAlgo(TuningAlgo):
             self.sw = 0 if self.sw == 1 else 1
             self.ind = ind_mem
             self.cap = cap_mem
-            self._set_state(phase="restore_state")
+            self._set_state(tuning_phase=TuningPhase.COARSE_RESET)
             self._update_measurement()
 
         if self.swr <= 120:
@@ -442,7 +442,7 @@ class ATU10ReferenceAlgo(TuningAlgo):
 
         self.sharp_tune()
         self._update_measurement()
-        self._trace("tune_end")
+        self._trace(TuningPhase.FINAL)
 
         if self.swr == 999:
             self.atu_reset()

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from .tuning_algos.types import AlgoResult, TuningAlgo, TuningConfig, Topology
+from .tuning_algos.types import AlgoResult, TuningAlgo, TuningConfig, Topology, TuningPhase
 
 
 @dataclass
@@ -14,7 +14,7 @@ class TuneTraceEntry:
     z_in: complex
     swr: int
     detector_output: int
-    phase: str
+    tuning_phase: TuningPhase
 
 
 @dataclass
@@ -52,7 +52,7 @@ class ATUSimulator:
                     z_in=t.z_in,
                     swr=t.detector_output,
                     detector_output=t.detector_output,
-                    phase=t.phase,
+                    tuning_phase=t.tuning_phase,
                 )
             )
 
