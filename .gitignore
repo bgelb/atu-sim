@@ -2,3 +2,6 @@ __pycache__/
 *.py[cod]
 .venv/
 plots/
+.DS_Store
+atu10_firmware_sim/.DS_Store
+examples/.DS_Store
