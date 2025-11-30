@@ -2,6 +2,12 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import sys
+
+# Allow running the script directly (python examples/edz_example.py) without installation
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from atu_sim.cebik_tables import TABLE1, TABLE3
 from atu_sim.detectors import ATU10IntegerVSWRDetector
