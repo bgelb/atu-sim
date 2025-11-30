@@ -25,6 +25,8 @@ def _build_algo(name: str, bank, detector):
     if name_l == "bg":
         return BGAlgo(bank, detector)
     if name_l == "atu10":
+        return ATU10ReferenceAlgo(bank, detector, options=ATU10Options(force_all_coarse_strategies=False))
+    if name_l in ("atu10_force", "atu10_all"):
         return ATU10ReferenceAlgo(bank, detector, options=ATU10Options(force_all_coarse_strategies=True))
     raise ValueError(f"Unknown algorithm {name}")
 
@@ -106,8 +108,10 @@ def main() -> None:
 
     banks = [("stock", atu10_bank()), ("alt", atu10_bank_alt())]
 
+    algo_names = ("atu10", "atu10_force", "bg")
+
     for bank_name, bank in banks:
-        for algo_name in ("atu10", "bg"):
+        for algo_name in algo_names:
             run_table(
                 TABLE3,
                 f"Cebik Table 3 - 70 ft high 88' doublet ({algo_name}, {bank_name} bank)",
