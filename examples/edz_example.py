@@ -10,9 +10,9 @@ import numpy as np
 from atu10_firmware_sim.cebik_tables import TABLE1, TABLE3
 from atu10_firmware_sim.detectors import ATU10IntegerVSWRDetector
 from atu10_firmware_sim.hardware import atu10_bank
-from atu10_firmware_sim.lc_bank import LCBank, ShuntPosition, swr_from_z
+from atu10_firmware_sim.lc_bank import LCBank, ShuntPosition
 from atu10_firmware_sim.simulator import ATUSimulator
-from atu10_firmware_sim.tuning_algos.base import Topology
+from atu10_firmware_sim.tuning_algos.types import Topology
 
 
 def fmt_swr(swr_int: int) -> str:
@@ -25,7 +25,7 @@ def _safe_label(label: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in label)
 
 
-def swr_grid(bank: LCBank, freq_hz: float, z_load: complex) -> dict[int, list[list[int]]]:
+def swr_grid(bank: LCBank, detector: ATU10IntegerVSWRDetector, freq_hz: float, z_load: complex) -> dict[int, list[list[int]]]:
     grids = {0: [], 1: []}
     for sw in (0, 1):
         pos = ShuntPosition.LOAD if sw == 0 else ShuntPosition.SOURCE
@@ -33,20 +33,24 @@ def swr_grid(bank: LCBank, freq_hz: float, z_load: complex) -> dict[int, list[li
         for ind in range(128):
             row: list[int] = []
             for cap in range(128):
-                row.append(bank.swr(freq_hz, z_load, ind, cap, pos))
+                z_in = bank.input_impedance(freq_hz, z_load, ind, cap, pos)
+                row.append(detector.measure(z_in))
             grid.append(row)
         grids[sw] = grid
     return grids
 
 
-def brute_force_best(bank: LCBank, freq_hz: float, z_load: complex) -> tuple[int, tuple[int, int, int]]:
+def brute_force_best(
+    bank: LCBank, detector: ATU10IntegerVSWRDetector, freq_hz: float, z_load: complex
+) -> tuple[int, tuple[int, int, int]]:
     best_swr = 999
     best_state = (0, 0, 0)
     for sw in (0, 1):
         pos = ShuntPosition.LOAD if sw == 0 else ShuntPosition.SOURCE
         for ind in range(128):
             for cap in range(128):
-                swr = bank.swr(freq_hz, z_load, ind, cap, pos)
+                z_in = bank.input_impedance(freq_hz, z_load, ind, cap, pos)
+                swr = detector.measure(z_in)
                 if swr < best_swr:
                     best_swr = swr
                     best_state = (ind, cap, sw)
@@ -299,7 +303,9 @@ def solve_shunt_then_series(
     return {"sw": 1, "L": L, "C": C}
 
 
-def find_ideal_match(freq_hz: float, z_load: complex, z0: float) -> dict:
+def find_ideal_match(
+    freq_hz: float, z_load: complex, z0: float, detector: ATU10IntegerVSWRDetector
+) -> dict:
     R = z_load.real
     X = z_load.imag
     w = 2 * math.pi * freq_hz
@@ -322,7 +328,7 @@ def find_ideal_match(freq_hz: float, z_load: complex, z0: float) -> dict:
                     L_series = Xs / w
                     C_shunt = Bc / w  # negative => shunt L
                     z_in = continuous_input_impedance(freq_hz, z_load, L_series, C_shunt, 0)
-                    swr = swr_from_z(z_in, z0)
+                    swr = detector.swr_from_z(z_in, z0)
                     candidates.append(
                         {"sw": 0, "L": L_series, "C": C_shunt, "z_in": z_in, "swr": swr}
                     )
@@ -343,14 +349,14 @@ def find_ideal_match(freq_hz: float, z_load: complex, z0: float) -> dict:
                 L_series = Xs / w
                 C_shunt = Bc / w
                 z_in = continuous_input_impedance(freq_hz, z_load, L_series, C_shunt, 1)
-                swr = swr_from_z(z_in, z0)
+                swr = detector.swr_from_z(z_in, z0)
                 candidates.append(
                     {"sw": 1, "L": L_series, "C": C_shunt, "z_in": z_in, "swr": swr}
                 )
 
     if not candidates:
         z_in = z_load
-        return {"sw": 0, "L": 0.0, "C": 0.0, "z_in": z_in, "swr": swr_from_z(z_in, z0)}
+        return {"sw": 0, "L": 0.0, "C": 0.0, "z_in": z_in, "swr": detector.swr_from_z(z_in, z0)}
 
     return min(candidates, key=lambda c: c["swr"])
 
@@ -383,7 +389,7 @@ def run_table(table, title: str, algo: str, bank: LCBank, detector: ATU10Integer
         sim = ATUSimulator(bank=bank, detector=detector, algorithm=algo)
         result = sim.tune(freq, zL)
 
-        ideal = find_ideal_match(freq, zL, 50.0)
+        ideal = find_ideal_match(freq, zL, 50.0, detector)
         z_ideal = ideal["z_in"]
         ideal_str = (
             f"L={ideal['L']*1e6:8.3f}u "
@@ -393,7 +399,7 @@ def run_table(table, title: str, algo: str, bank: LCBank, detector: ATU10Integer
             f"SWR={fmt_swr(ideal['swr']):>6}"
         )
 
-        best_swr, best_state = brute_force_best(bank, freq, zL)
+        best_swr, best_state = brute_force_best(bank, detector, freq, zL)
         z_best = bank.input_impedance(
             freq, zL, best_state[0], best_state[1], ShuntPosition.LOAD if best_state[2] == 0 else ShuntPosition.SOURCE
         )
@@ -462,7 +468,7 @@ def main() -> None:
     for label, freq, zL in TABLE1 + TABLE3:
         sim = ATUSimulator(bank=bank, detector=detector, algorithm=args.algorithm)
         result = sim.tune(freq, zL)
-        grids = swr_grid(bank, freq, zL)
+        grids = swr_grid(bank, detector, freq, zL)
         trace_dicts = [
             {
                 "cap": t.c_bits,

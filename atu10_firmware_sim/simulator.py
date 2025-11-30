@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 from .detectors import Detector
-from .lc_bank import LCBank, ShuntPosition, swr_from_z
-from .tuning_algos.base import TuningConfig, Topology
-from .tuning_algos.legacy import LegacyATU10Algo, LegacyBGAlgo, LegacyResult
+from .lc_bank import LCBank
+from .tuning_algos.atu10_reference import ATU10ReferenceAlgo
+from .tuning_algos.bg_algo import BGAlgo
+from .tuning_algos.types import AlgoResult, TuningAlgo, TuningConfig, Topology
 
 
 @dataclass
@@ -35,61 +35,53 @@ class TuneResult:
 class ATUSimulator:
     """
     Orchestrates a tune using an LCBank, Detector, and TuningAlgo.
-
-    Currently wraps legacy algorithms; future algos can implement the base
-    TuningAlgo interface directly.
     """
 
     def __init__(
         self,
         bank: LCBank,
         detector: Detector,
-        algorithm: str = "bg",
-        z0: float = 50.0,
+        algorithm: str | TuningAlgo = "bg",
     ) -> None:
         self.bank = bank
         self.detector = detector
-        self.z0 = z0
-        algo_l = algorithm.lower()
-        if algo_l == "bg":
-            self.algo = LegacyBGAlgo(bank)
-        elif algo_l == "atu10":
-            self.algo = LegacyATU10Algo(bank)
+        if isinstance(algorithm, str):
+            algo_l = algorithm.lower()
+            if algo_l == "bg":
+                self.algo: TuningAlgo = BGAlgo(bank, detector)
+            elif algo_l == "atu10":
+                self.algo = ATU10ReferenceAlgo(bank, detector)
+            else:
+                raise ValueError(f"Unknown algorithm {algorithm}")
         else:
-            raise ValueError(f"Unknown algorithm {algorithm}")
+            self.algo = algorithm
 
     def tune(self, freq_hz: float, z_load: complex) -> TuneResult:
-        # For now the legacy algo runs the full tune internally
-        if isinstance(self.algo, (LegacyBGAlgo, LegacyATU10Algo)):
-            legacy_result: LegacyResult = self.algo.run(freq_hz, z_load, self.detector)
-            trace_entries: list[TuneTraceEntry] = []
-            for t in legacy_result.trace:
-                topo = t["topology"]
-                z_in = t["z_in"]
-                metric = self.detector.measure(z_in)
-                trace_entries.append(
-                    TuneTraceEntry(
-                        step=t["step"],
-                        topology=topo,
-                        sw=0 if topo == Topology.SHUNT_AT_LOAD else 1,
-                        l_bits=t["l_bits"],
-                        c_bits=t["c_bits"],
-                        z_in=z_in,
-                        swr=metric,
-                        detector_output=metric,
-                        phase=t["phase"],
-                    )
+        algo_result: AlgoResult = self.algo.run(freq_hz, z_load)
+        trace_entries: list[TuneTraceEntry] = []
+        for t in algo_result.trace:
+            trace_entries.append(
+                TuneTraceEntry(
+                    step=t.step,
+                    topology=t.topology,
+                    sw=0 if t.topology == Topology.SHUNT_AT_LOAD else 1,
+                    l_bits=t.l_bits,
+                    c_bits=t.c_bits,
+                    z_in=t.z_in,
+                    swr=t.detector_output,
+                    detector_output=t.detector_output,
+                    phase=t.phase,
                 )
-            final_topo = legacy_result.final_config.topology
-            z_in_final = trace_entries[-1].z_in if trace_entries else z_load
-            detector_out = trace_entries[-1].detector_output if trace_entries else self.detector.measure(z_in_final)
-            return TuneResult(
-                final_config=legacy_result.final_config,
-                final_z_in=z_in_final,
-                final_swr=legacy_result.final_swr,
-                detector_output=detector_out,
-                steps=legacy_result.steps,
-                trace=trace_entries,
             )
 
-        raise NotImplementedError("Non-legacy algos not yet wired")
+        final_z_in = algo_result.final_z_in
+        detector_out = algo_result.final_detector_output
+
+        return TuneResult(
+            final_config=algo_result.final_config,
+            final_z_in=final_z_in,
+            final_swr=detector_out,
+            detector_output=detector_out,
+            steps=len(trace_entries),
+            trace=trace_entries,
+        )

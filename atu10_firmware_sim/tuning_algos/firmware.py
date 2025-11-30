@@ -1,239 +1,135 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-import math
+from dataclasses import dataclass
 
-Z0_DEFAULT = 50.0
+from ..detectors import Detector
+from ..lc_bank import LCBank, ShuntPosition
+from .types import AlgoResult, AlgoTrace, Topology, TuningConfig
+
+
+def _topology_from_sw(sw: int) -> Topology:
+    return Topology.SHUNT_AT_LOAD if sw == 0 else Topology.SHUNT_AT_SOURCE
 
 
 @dataclass
-class SimFlags:
-    """
-    Optional knobs to experiment with algorithm tweaks while keeping defaults
-    faithful to the firmware when unset.
-
-    force_all_coarse_strategies:
-        If True, always run coarse strategies 2 and 3 regardless of the
-        cap/ind gate. Leave False for firmware-faithful behavior.
-
-    debug_coarse:
-        If True, print coarse-tune step-by-step details (for investigation).
-
-    trace_steps:
-        If True, record every relay-set step (phase, SW, ind, cap, SWR) for
-        later plotting or analysis.
-
-    algorithm:
-        Select tuning algorithm. "bg" (default) is the improved search
-        described in the README; "atu10" preserves the firmware-faithful
-        behavior.
-    """
-
+class AlgoOptions:
     force_all_coarse_strategies: bool = False
     debug_coarse: bool = False
-    trace_steps: bool = False
-    algorithm: str = "bg"
+    trace_steps: bool = True
 
 
-@dataclass
-class LCBank:
-    l_values: tuple[float, ...] = (
-        0.22e-6,
-        0.45e-6,
-        1.0e-6,
-        2.2e-6,
-        4.5e-6,
-        10.0e-6,
-        22.0e-6,
-    )
-    # ATU10 values
-    c_values: tuple[float, ...] = (
-        10e-12,
-        22e-12,
-        47e-12,
-        100e-12,
-        220e-12,
-        470e-12,
-        1.0e-9,
-    )
+class FirmwareAlgo:
+    """
+    Implements the reference ATU-10 firmware state machine (both the stock
+    algorithm and the BG improved search) using the new LCBank/Detector
+    interfaces.
+    """
 
-    def l_from_bits(self, bits: int) -> float:
-        return sum(v for i, v in enumerate(self.l_values) if bits & (1 << i))
+    def __init__(
+        self,
+        bank: LCBank,
+        detector: Detector,
+        options: AlgoOptions | None = None,
+    ) -> None:
+        if len(bank.l_values) != 7 or len(bank.c_values) != 7:
+            raise AssertionError("FirmwareAlgo expects 7 L relays and 7 C relays")
+        self.bank = bank
+        self.detector = detector
+        self.options = options or AlgoOptions()
+        self.trace: list[AlgoTrace] = []
+        self._trace_step = 0
+        self.freq_hz = 0.0
+        self.z_load: complex = 0j
+        self.ind = 0
+        self.cap = 0
+        self.sw = 0
+        self.swr = 999
+        self.z_in = complex(0, 0)
 
-    def c_from_bits(self, bits: int) -> float:
-        return sum(v for i, v in enumerate(self.c_values) if bits & (1 << i))
-
-    def nearest_lc(
-        self, l_target: float, c_target: float
-    ) -> tuple[int, float, int, float, bool]:
-        """
-        Find relay bitmasks that most closely realize the requested L and C.
-
-        Returns (l_bits, l_henry, c_bits, c_farad, in_range) where in_range
-        is True only if both requested targets fall within achievable min/max.
-        """
-        l_bits_best, l_value_best = min(
-            ((bits, self.l_from_bits(bits)) for bits in range(1 << len(self.l_values))),
-            key=lambda pair: abs(pair[1] - l_target),
-        )
-        c_bits_best, c_value_best = min(
-            ((bits, self.c_from_bits(bits)) for bits in range(1 << len(self.c_values))),
-            key=lambda pair: abs(pair[1] - c_target),
-        )
-
-        l_max = self.l_from_bits((1 << len(self.l_values)) - 1)
-        c_max = self.c_from_bits((1 << len(self.c_values)) - 1)
-        in_range = (0.0 <= l_target <= l_max) and (0.0 <= c_target <= c_max)
-
-        return l_bits_best, l_value_best, c_bits_best, c_value_best, in_range
-
-
-def _safe_inv(z: complex) -> complex:
-    if abs(z) < 1e-12:
-        return 0j
-    return 1.0 / z
-
-
-def l_network_input_impedance(
-    freq_hz: float,
-    z_load: complex,
-    l_bits: int,
-    c_bits: int,
-    sw: int,
-    bank: LCBank | None = None,
-) -> complex:
-    if bank is None:
-        bank = LCBank()
-
-    w = 2 * math.pi * freq_hz
-    L = bank.l_from_bits(l_bits)
-    C = bank.c_from_bits(c_bits)
-
-    if L == 0 and C == 0:
-        return z_load
-
-    j = 1j
-    z_L_series = j * w * L if L > 0 else 0j
-    y_C = j * w * C if C > 0 else 0j
-
-    if sw == 0:
-        y_load = _safe_inv(z_load)
-        y_total = y_load + y_C
-        if abs(y_total) < 1e-18:
-            z_node = complex(1e12, 0)
-        else:
-            z_node = 1.0 / y_total
-        return z_L_series + z_node
-    else:
-        z_series = z_L_series + z_load
-        y_series = _safe_inv(z_series)
-        y_in = y_series + y_C
-        if abs(y_in) < 1e-18:
-            return complex(1e12, 0)
-        return 1.0 / y_in
-
-
-def swr_from_z(z_in: complex, z0: float = Z0_DEFAULT) -> int:
-    if math.isinf(z_in.real) or math.isinf(z_in.imag):
-        return 999
-
-    denom = z_in + z0
-    if abs(denom) < 1e-12:
-        return 999
-
-    gamma = (z_in - z0) / denom
-    mag = abs(gamma)
-    if mag >= 0.999:
-        return 999
-
-    s = (1.0 + mag) / (1.0 - mag)
-    if s > 9.985:
-        return 999
-
-    swr_int = int(s * 100.0 + 0.5)
-    return max(swr_int, 100)
-
-
-@dataclass
-class TunerSim:
-    freq_hz: float
-    z_load: complex
-    bank: LCBank = field(default_factory=LCBank)
-    z0: float = Z0_DEFAULT
-    flags: SimFlags = field(default_factory=SimFlags)
-
-    ind: int = 0
-    cap: int = 0
-    SW: int = 0
-    SWR: int = 999
-    trace: list[dict] = field(default_factory=list)
-    _trace_step: int = 0
-
-    def _fmt_swr_val(self, swr: int) -> str:
-        if swr >= 999:
-            return ">= 9.99"
-        return f"{swr / 100.0:.2f}"
-
+    # ---- generic helpers ----
     def _dbg(self, msg: str) -> None:
-        if self.flags.debug_coarse:
+        if self.options.debug_coarse:
             print(msg)
 
+    def _update_measurement(self) -> None:
+        pos = ShuntPosition.LOAD if self.sw == 0 else ShuntPosition.SOURCE
+        self.z_in = self.bank.input_impedance(
+            self.freq_hz, self.z_load, self.ind, self.cap, pos
+        )
+        self.swr = self.detector.measure(self.z_in)
+
     def _trace(self, phase: str) -> None:
-        if not self.flags.trace_steps:
+        if not self.options.trace_steps:
             return
         self._trace_step += 1
         self.trace.append(
-            {
-                "step": self._trace_step,
-                "phase": phase,
-                "SW": self.SW,
-                "ind": self.ind,
-                "cap": self.cap,
-                "SWR": self.SWR,
-            }
+            AlgoTrace(
+                step=self._trace_step,
+                phase=phase,
+                topology=_topology_from_sw(self.sw),
+                l_bits=self.ind,
+                c_bits=self.cap,
+                z_in=self.z_in,
+                detector_output=self.swr,
+            )
         )
 
-    def atu_reset(self) -> None:
-        self.ind = 0
-        self.cap = 1
-        self.SW = 0
-        self.get_swr()
-        self._trace("reset")
-
-    def get_swr(self) -> None:
-        z_in = l_network_input_impedance(
-            self.freq_hz, self.z_load, self.ind, self.cap, self.SW, self.bank
-        )
-        self.SWR = swr_from_z(z_in, self.z0)
-
-    def relay_set(
+    def _set_state(
         self,
         ind: int | None = None,
         cap: int | None = None,
-        SW: int | None = None,
+        sw: int | None = None,
         phase: str | None = None,
     ) -> None:
         if ind is not None:
             self.ind = ind
         if cap is not None:
             self.cap = cap
-        if SW is not None:
-            self.SW = SW
-        self.get_swr()
+        if sw is not None:
+            self.sw = sw
+        self._update_measurement()
         if phase:
             self._trace(phase)
 
+    def _prepare_run(self, freq_hz: float, z_load: complex) -> None:
+        self.freq_hz = freq_hz
+        self.z_load = z_load
+        self.trace.clear()
+        self._trace_step = 0
+        self.atu_reset()
+
+    def _result(self) -> AlgoResult:
+        final_config = TuningConfig(
+            l_bits=self.ind,
+            c_bits=self.cap,
+            topology=_topology_from_sw(self.sw),
+        )
+        return AlgoResult(
+            final_config=final_config,
+            final_z_in=self.z_in,
+            final_detector_output=self.swr,
+            trace=list(self.trace),
+        )
+
+    # ---- reused ATU-10 firmware logic ----
+    def atu_reset(self) -> None:
+        self.ind = 0
+        self.cap = 1
+        self.sw = 0
+        self._update_measurement()
+        self._trace("reset")
+
     def coarse_cap(self) -> None:
         cap_mem = 0
-        self.get_swr()
-        swr_mem = self.SWR // 10
+        self._update_measurement()
+        swr_mem = self.swr // 10
 
         cap = 1
         while cap < 64:
-            self.relay_set(cap=cap, phase="coarse_cap")
-            swr_scaled = self.SWR // 10
+            self._set_state(cap=cap, phase="coarse_cap")
+            swr_scaled = self.swr // 10
             self._dbg(
-                f"        cap step: cap={cap:3d} SWR={self._fmt_swr_val(self.SWR)} scaled={swr_scaled}"
+                f"        cap step: cap={cap:3d} SWR={self.swr} scaled={swr_scaled}"
             )
             if swr_scaled <= swr_mem:
                 cap_mem = cap
@@ -243,22 +139,22 @@ class TunerSim:
                 break
 
         self.cap = cap_mem
-        self.relay_set(cap=self.cap, phase="coarse_cap_final")
+        self._set_state(cap=self.cap, phase="coarse_cap_final")
         self._dbg(
-            f"        coarse_cap chosen cap={self.cap:3d} SWR={self._fmt_swr_val(self.SWR)}"
+            f"        coarse_cap chosen cap={self.cap:3d} SWR={self.swr}"
         )
 
     def coarse_ind(self) -> None:
         ind_mem = 0
-        self.get_swr()
-        swr_mem = self.SWR // 10
+        self._update_measurement()
+        swr_mem = self.swr // 10
 
         ind = 1
         while ind < 64:
-            self.relay_set(ind=ind, phase="coarse_ind")
-            swr_scaled = self.SWR // 10
+            self._set_state(ind=ind, phase="coarse_ind")
+            swr_scaled = self.swr // 10
             self._dbg(
-                f"        ind step: ind={ind:3d} SWR={self._fmt_swr_val(self.SWR)} scaled={swr_scaled}"
+                f"        ind step: ind={ind:3d} SWR={self.swr} scaled={swr_scaled}"
             )
             if swr_scaled <= swr_mem:
                 ind_mem = ind
@@ -268,22 +164,22 @@ class TunerSim:
                 break
 
         self.ind = ind_mem
-        self.relay_set(ind=self.ind, phase="coarse_ind_final")
+        self._set_state(ind=self.ind, phase="coarse_ind_final")
         self._dbg(
-            f"        coarse_ind chosen ind={self.ind:3d} SWR={self._fmt_swr_val(self.SWR)}"
+            f"        coarse_ind chosen ind={self.ind:3d} SWR={self.swr}"
         )
 
     def coarse_ind_cap(self) -> None:
         ind_mem = 0
-        self.get_swr()
-        swr_mem = self.SWR // 10
+        self._update_measurement()
+        swr_mem = self.swr // 10
 
         ind = 1
         while ind < 64:
-            self.relay_set(ind=ind, cap=ind, phase="coarse_ind_cap")
-            swr_scaled = self.SWR // 10
+            self._set_state(ind=ind, cap=ind, phase="coarse_ind_cap")
+            swr_scaled = self.swr // 10
             self._dbg(
-                f"        ind=cap step: val={ind:3d} SWR={self._fmt_swr_val(self.SWR)} scaled={swr_scaled}"
+                f"        ind=cap step: val={ind:3d} SWR={self.swr} scaled={swr_scaled}"
             )
             if swr_scaled <= swr_mem:
                 ind_mem = ind
@@ -294,9 +190,9 @@ class TunerSim:
 
         self.ind = ind_mem
         self.cap = ind_mem
-        self.relay_set(ind=self.ind, cap=self.cap, phase="coarse_ind_cap_final")
+        self._set_state(ind=self.ind, cap=self.cap, phase="coarse_ind_cap_final")
         self._dbg(
-            f"        coarse_ind_cap chosen ind=cap={self.ind:3d} SWR={self._fmt_swr_val(self.SWR)}"
+            f"        coarse_ind_cap chosen ind=cap={self.ind:3d} SWR={self.swr}"
         )
 
     def coarse_tune(self) -> None:
@@ -310,48 +206,48 @@ class TunerSim:
         debug_results: list[tuple[str, int, int, int]] = []
 
         self._dbg(
-            f"    coarse_tune start SW={self.SW} ind={self.ind:3d} cap={self.cap:3d} SWR={self._fmt_swr_val(self.SWR)}"
+            f"    coarse_tune start SW={self.sw} ind={self.ind:3d} cap={self.cap:3d} SWR={self.swr}"
         )
         self._trace("coarse_tune_start")
 
         self._dbg("      Strategy 1 (coarse_cap -> coarse_ind):")
         self.coarse_cap()
         self.coarse_ind()
-        self.get_swr()
-        if self.SWR <= 120:
-            if self.flags.debug_coarse:
-                debug_results.append(("Strategy 1", self.ind, self.cap, self.SWR))
+        self._update_measurement()
+        if self.swr <= 120:
+            if self.options.debug_coarse:
+                debug_results.append(("Strategy 1", self.ind, self.cap, self.swr))
             return
 
-        SWR_mem1 = self.SWR
+        SWR_mem1 = self.swr
         ind_mem1 = self.ind
         cap_mem1 = self.cap
-        if self.flags.debug_coarse:
-            debug_results.append(("Strategy 1", self.ind, self.cap, self.SWR))
+        if self.options.debug_coarse:
+            debug_results.append(("Strategy 1", self.ind, self.cap, self.swr))
 
         allow_alt = self.cap <= 2 and self.ind <= 2
-        if self.flags.force_all_coarse_strategies:
+        if self.options.force_all_coarse_strategies:
             allow_alt = True
 
         if allow_alt:
             self._dbg("      Strategy 2 (coarse_ind -> coarse_cap):")
             self.ind = 0
             self.cap = 0
-            self.relay_set(phase="coarse_strategy2_reset")
+            self._set_state(phase="coarse_strategy2_reset")
             self.coarse_ind()
             self.coarse_cap()
-            self.get_swr()
-            if self.SWR <= 120:
-                if self.flags.debug_coarse:
+            self._update_measurement()
+            if self.swr <= 120:
+                if self.options.debug_coarse:
                     debug_results.append(
-                        ("Strategy 2", self.ind, self.cap, self.SWR)
+                        ("Strategy 2", self.ind, self.cap, self.swr)
                     )
                 return
-            SWR_mem2 = self.SWR
+            SWR_mem2 = self.swr
             ind_mem2 = self.ind
             cap_mem2 = self.cap
-            if self.flags.debug_coarse:
-                debug_results.append(("Strategy 2", self.ind, self.cap, self.SWR))
+            if self.options.debug_coarse:
+                debug_results.append(("Strategy 2", self.ind, self.cap, self.swr))
         else:
             self._dbg("      Strategy 2 skipped (cap>2 or ind>2 after Strategy 1)")
             SWR_mem2 = 10000
@@ -360,20 +256,20 @@ class TunerSim:
             self._dbg("      Strategy 3 (coarse_ind_cap):")
             self.ind = 0
             self.cap = 0
-            self.relay_set(phase="coarse_strategy3_reset")
+            self._set_state(phase="coarse_strategy3_reset")
             self.coarse_ind_cap()
-            self.get_swr()
-            if self.SWR <= 120:
-                if self.flags.debug_coarse:
+            self._update_measurement()
+            if self.swr <= 120:
+                if self.options.debug_coarse:
                     debug_results.append(
-                        ("Strategy 3", self.ind, self.cap, self.SWR)
+                        ("Strategy 3", self.ind, self.cap, self.swr)
                     )
                 return
-            SWR_mem3 = self.SWR
+            SWR_mem3 = self.swr
             ind_mem3 = self.ind
             cap_mem3 = self.cap
-            if self.flags.debug_coarse:
-                debug_results.append(("Strategy 3", self.ind, self.cap, self.SWR))
+            if self.options.debug_coarse:
+                debug_results.append(("Strategy 3", self.ind, self.cap, self.swr))
         else:
             self._dbg("      Strategy 3 skipped (cap>2 or ind>2 after Strategy 1)")
             SWR_mem3 = 10000
@@ -388,13 +284,13 @@ class TunerSim:
             self.cap = cap_mem3
             self.ind = ind_mem3
 
-        self.relay_set()
+        self._set_state()
 
-        if self.flags.debug_coarse and debug_results:
+        if self.options.debug_coarse and debug_results:
             self._dbg("      Summary:")
             for name, ind_v, cap_v, swr_v in debug_results:
                 self._dbg(
-                    f"        {name}: ind={ind_v:3d} cap={cap_v:3d} SWR={self._fmt_swr_val(swr_v)}"
+                    f"        {name}: ind={ind_v:3d} cap={cap_v:3d} SWR={swr_v}"
                 )
 
     def sharp_cap(self) -> None:
@@ -403,47 +299,47 @@ class TunerSim:
         if step == 0:
             step = 1
 
-        self.get_swr()
-        swr_mem = self.SWR
+        self._update_measurement()
+        swr_mem = self.swr
 
         cap_trial = self.cap + step
         if cap_trial > 127:
             cap_trial = 127
-        self.relay_set(cap=cap_trial, phase="sharp_cap")
+        self._set_state(cap=cap_trial, phase="sharp_cap")
 
-        if self.SWR <= swr_mem:
-            swr_mem = self.SWR
+        if self.swr <= swr_mem:
+            swr_mem = self.swr
             cap_mem = self.cap
             while True:
                 cap_trial = self.cap + step
                 if cap_trial > (127 - step):
                     break
-                self.relay_set(cap=cap_trial, phase="sharp_cap")
-                if self.SWR <= swr_mem:
+                self._set_state(cap=cap_trial, phase="sharp_cap")
+                if self.swr <= swr_mem:
                     cap_mem = self.cap
-                    swr_mem = self.SWR
+                    swr_mem = self.swr
                     step = self.cap // 10
                     if step == 0:
                         step = 1
                 else:
                     break
         else:
-            swr_mem = self.SWR
+            swr_mem = self.swr
             while True:
                 cap_trial = self.cap - step
                 if cap_trial < step:
                     break
-                self.relay_set(cap=cap_trial, phase="sharp_cap")
-                if self.SWR <= swr_mem:
+                self._set_state(cap=cap_trial, phase="sharp_cap")
+                if self.swr <= swr_mem:
                     cap_mem = self.cap
-                    swr_mem = self.SWR
+                    swr_mem = self.swr
                     step = self.cap // 10
                     if step == 0:
                         step = 1
                 else:
                     break
 
-        self.relay_set(cap=cap_mem, phase="sharp_cap_final")
+        self._set_state(cap=cap_mem, phase="sharp_cap_final")
 
     def sharp_ind(self) -> None:
         ind_mem = self.ind
@@ -451,47 +347,47 @@ class TunerSim:
         if step == 0:
             step = 1
 
-        self.get_swr()
-        swr_mem = self.SWR
+        self._update_measurement()
+        swr_mem = self.swr
 
         ind_trial = self.ind + step
         if ind_trial > 127:
             ind_trial = 127
-        self.relay_set(ind=ind_trial, phase="sharp_ind")
+        self._set_state(ind=ind_trial, phase="sharp_ind")
 
-        if self.SWR <= swr_mem:
-            swr_mem = self.SWR
+        if self.swr <= swr_mem:
+            swr_mem = self.swr
             ind_mem = self.ind
             while True:
                 ind_trial = self.ind + step
                 if ind_trial > (127 - step):
                     break
-                self.relay_set(ind=ind_trial, phase="sharp_ind")
-                if self.SWR <= swr_mem:
+                self._set_state(ind=ind_trial, phase="sharp_ind")
+                if self.swr <= swr_mem:
                     ind_mem = self.ind
-                    swr_mem = self.SWR
+                    swr_mem = self.swr
                     step = self.ind // 10
                     if step == 0:
                         step = 1
                 else:
                     break
         else:
-            swr_mem = self.SWR
+            swr_mem = self.swr
             while True:
                 ind_trial = self.ind - step
                 if ind_trial < step:
                     break
-                self.relay_set(ind=ind_trial, phase="sharp_ind")
-                if self.SWR <= swr_mem:
+                self._set_state(ind=ind_trial, phase="sharp_ind")
+                if self.swr <= swr_mem:
                     ind_mem = self.ind
-                    swr_mem = self.SWR
+                    swr_mem = self.swr
                     step = self.ind // 10
                     if step == 0:
                         step = 1
                 else:
                     break
 
-        self.relay_set(ind=ind_mem, phase="sharp_ind_final")
+        self._set_state(ind=ind_mem, phase="sharp_ind_final")
 
     def sharp_tune(self) -> None:
         if self.cap >= self.ind:
@@ -504,61 +400,56 @@ class TunerSim:
     def subtune(self) -> None:
         self.ind = 0
         self.cap = 0
-        self.relay_set(phase="subtune_reset")
-        if self.SWR <= 120:
+        self._set_state(phase="subtune_reset")
+        if self.swr <= 120:
             return
 
         self.coarse_tune()
-        self.get_swr()
-        if self.SWR <= 120:
+        self._update_measurement()
+        if self.swr <= 120:
             return
 
         self.sharp_tune()
 
-    def tune(self) -> None:
-        if self.flags.algorithm == "atu10":
-            return self._tune_atu10()
-        return self._tune_bg()
-
     def _tune_atu10(self) -> None:
-        if self.flags.trace_steps:
+        if self.options.trace_steps:
             self.trace.clear()
             self._trace_step = 0
 
-        self.get_swr()
+        self._update_measurement()
         self._trace("tune_start")
-        if self.SWR <= 120:
+        if self.swr <= 120:
             return
 
         self.subtune()
-        self.get_swr()
-        if self.SWR <= 120:
+        self._update_measurement()
+        if self.swr <= 120:
             return
 
-        SWR_mem = self.SWR
+        SWR_mem = self.swr
         cap_mem = self.cap
         ind_mem = self.ind
 
-        self.SW = 0 if self.SW == 1 else 1
+        self.sw = 0 if self.sw == 1 else 1
         self._trace("toggle_sw")
         self.subtune()
-        self.get_swr()
+        self._update_measurement()
 
-        if self.SWR > SWR_mem:
-            self.SW = 0 if self.SW == 1 else 1
+        if self.swr > SWR_mem:
+            self.sw = 0 if self.sw == 1 else 1
             self.ind = ind_mem
             self.cap = cap_mem
-            self.relay_set(phase="restore_state")
-            self.get_swr()
+            self._set_state(phase="restore_state")
+            self._update_measurement()
 
-        if self.SWR <= 120:
+        if self.swr <= 120:
             return
 
         self.sharp_tune()
-        self.get_swr()
+        self._update_measurement()
         self._trace("tune_end")
 
-        if self.SWR == 999:
+        if self.swr == 999:
             self.atu_reset()
 
     def _bg_apply_state(self, sw: int, primary: int, secondary: int, phase: str) -> None:
@@ -568,16 +459,9 @@ class TunerSim:
         For sw=1: primary=C(cap), secondary=L(ind).
         """
         if sw == 0:
-            self.relay_set(ind=primary, cap=secondary, SW=sw, phase=phase)
+            self._set_state(ind=primary, cap=secondary, sw=sw, phase=phase)
         else:
-            self.relay_set(ind=secondary, cap=primary, SW=sw, phase=phase)
-
-    def _bg_eval_swr(self, sw: int, primary: int, secondary: int) -> int:
-        if sw == 0:
-            z_in = l_network_input_impedance(self.freq_hz, self.z_load, primary, secondary, sw, self.bank)
-        else:
-            z_in = l_network_input_impedance(self.freq_hz, self.z_load, secondary, primary, sw, self.bank)
-        return swr_from_z(z_in, self.z0)
+            self._set_state(ind=secondary, cap=primary, sw=sw, phase=phase)
 
     def _bg_walk_primary(
         self, sw: int, primary_start: int, secondary: int, best_swr: int, phase_prefix: str
@@ -594,7 +478,7 @@ class TunerSim:
         while p < 127:
             p += 1
             self._bg_apply_state(sw, p, secondary, f"{phase_prefix}_inc")
-            swr = self.SWR
+            swr = self.swr
             if swr < best_val:
                 best_val = swr
                 best_primary = p
@@ -606,7 +490,7 @@ class TunerSim:
         while p > 0:
             p -= 1
             self._bg_apply_state(sw, p, secondary, f"{phase_prefix}_dec")
-            swr = self.SWR
+            swr = self.swr
             if swr < best_val:
                 best_val = swr
                 best_primary = p
@@ -637,7 +521,7 @@ class TunerSim:
 
                 # Start from best primary found so far
                 self._bg_apply_state(sw, best_p, s_candidate, "bg_sec_start")
-                start_swr = self.SWR
+                start_swr = self.swr
                 p_start = best_p
 
                 if start_swr >= 900:
@@ -651,7 +535,7 @@ class TunerSim:
                         best_trial: tuple[int, int] | None = None
                         for p in candidates:
                             self._bg_apply_state(sw, p, s_candidate, "bg_sec_probe")
-                            swr_try = self.SWR
+                            swr_try = self.swr
                             if swr_try < 900:
                                 if best_trial is None or swr_try < best_trial[1]:
                                     best_trial = (p, swr_try)
@@ -662,7 +546,7 @@ class TunerSim:
                             break
 
                 p_best_local, swr_local = self._bg_walk_primary(
-                    sw, p_start, s_candidate, self.SWR, "bg_sec_walk"
+                    sw, p_start, s_candidate, self.swr, "bg_sec_walk"
                 )
                 # Apply/log best for this secondary
                 self._bg_apply_state(sw, p_best_local, s_candidate, "bg_sec_best")
@@ -682,11 +566,11 @@ class TunerSim:
 
     def _tune_bg(self) -> None:
         # Clear trace if needed
-        if self.flags.trace_steps:
+        if self.options.trace_steps:
             self.trace.clear()
             self._trace_step = 0
 
-        self.get_swr()
+        self._update_measurement()
         self._trace("bg_start")
 
         ind_candidates = [0, 16, 32, 48, 64, 80, 96, 112, 127]
@@ -700,7 +584,7 @@ class TunerSim:
             for ind in ind_candidates:
                 for cap in cap_candidates:
                     self._bg_apply_state(sw, ind if sw == 0 else cap, cap if sw == 0 else ind, "bg_coarse_eval")
-                    swr = self.SWR
+                    swr = self.swr
                     if sw == 0:
                         if swr < best_swr_sw0:
                             best_swr_sw0 = swr
@@ -751,56 +635,13 @@ class TunerSim:
 
         self._trace("bg_end")
 
+    # ---- public entrypoints ----
+    def run_atu10(self, freq_hz: float, z_load: complex) -> AlgoResult:
+        self._prepare_run(freq_hz, z_load)
+        self._tune_atu10()
+        return self._result()
 
-def brute_force_best(
-    freq_hz: float,
-    z_load: complex,
-    bank: LCBank | None = None,
-) -> tuple[int, tuple[int, int, int]]:
-    if bank is None:
-        bank = LCBank()
-
-    best_swr = 999
-    best_state: tuple[int, int, int] | None = None
-
-    for sw in (0, 1):
-        for ind in range(0, 128):
-            for cap in range(0, 128):
-                z_in = l_network_input_impedance(freq_hz, z_load, ind, cap, sw, bank)
-                swr = swr_from_z(z_in)
-                if swr < best_swr:
-                    best_swr = swr
-                    best_state = (ind, cap, sw)
-
-    assert best_state is not None
-    return best_swr, best_state
-
-
-def swr_grid(
-    freq_hz: float,
-    z_load: complex,
-    bank: LCBank | None = None,
-) -> dict[int, list[list[int]]]:
-    """
-    Compute SWR for every relay combination (128x128) for both topologies.
-
-    Returns a dict keyed by SW (0 or 1) with a 128x128 list of SWR ints.
-    Rows are inductor bitmasks 0..127; columns are capacitor bitmasks 0..127.
-    """
-    if bank is None:
-        bank = LCBank()
-
-    grids: dict[int, list[list[int]]] = {0: [], 1: []}
-
-    for sw in (0, 1):
-        grid: list[list[int]] = []
-        for ind in range(128):
-            row: list[int] = []
-            for cap in range(128):
-                z_in = l_network_input_impedance(freq_hz, z_load, ind, cap, sw, bank)
-                swr = swr_from_z(z_in)
-                row.append(swr)
-            grid.append(row)
-        grids[sw] = grid
-
-    return grids
+    def run_bg(self, freq_hz: float, z_load: complex) -> AlgoResult:
+        self._prepare_run(freq_hz, z_load)
+        self._tune_bg()
+        return self._result()
