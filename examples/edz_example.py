@@ -478,13 +478,13 @@ def main() -> None:
             }
             for t in result.trace
         ]
-        coarse_best = None
-        per_secondary = []
+        coarse_best_by_sw: dict[int, tuple[int, int] | None] = {0: None, 1: None}
+        per_secondary_by_sw: dict[int, list[tuple[int, int]]] = {0: [], 1: []}
         for t in trace_dicts:
             if t["phase"] == "bg_coarse_best":
-                coarse_best = (t["cap"], t["ind"])
+                coarse_best_by_sw[t["sw"]] = (t["cap"], t["ind"])
             if t["phase"] == "bg_sec_best":
-                per_secondary.append((t["cap"], t["ind"]))
+                per_secondary_by_sw[t["sw"]].append((t["cap"], t["ind"]))
         final_state = (
             (result.final_config.c_bits, result.final_config.l_bits)
             if result.final_config.topology == Topology.SHUNT_AT_LOAD
@@ -497,8 +497,8 @@ def main() -> None:
             out_dir,
             trace=trace_dicts,
             final_state=final_state if result.final_config.topology == Topology.SHUNT_AT_LOAD else None,
-            coarse_best=coarse_best if coarse_best else None,
-            per_secondary=per_secondary if per_secondary else None,
+            coarse_best=coarse_best_by_sw[0],
+            per_secondary=per_secondary_by_sw[0] if per_secondary_by_sw[0] else None,
         )
         path1 = plot_swr_grid(
             grids[1],
@@ -507,8 +507,8 @@ def main() -> None:
             out_dir,
             trace=trace_dicts,
             final_state=final_state if result.final_config.topology == Topology.SHUNT_AT_SOURCE else None,
-            coarse_best=coarse_best if coarse_best else None,
-            per_secondary=per_secondary if per_secondary else None,
+            coarse_best=coarse_best_by_sw[1],
+            per_secondary=per_secondary_by_sw[1] if per_secondary_by_sw[1] else None,
         )
         print(f"  {label}: {path0}, {path1}")
 
