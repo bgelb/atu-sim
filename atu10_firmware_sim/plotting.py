@@ -60,8 +60,9 @@ def new_plot(title: str, sw: int):
 
 def plot_vswr_map(ax, swr_map: Sequence[Sequence[float]]):
     data = np.array(swr_map, dtype=float)
+    data[~np.isfinite(data)] = _BOUNDS[-1]
     cmap = plt.matplotlib.colors.ListedColormap(_COLORS)
-    norm = plt.matplotlib.colors.BoundaryNorm(_BOUNDS, cmap.N)
+    norm = plt.matplotlib.colors.BoundaryNorm(_BOUNDS, cmap.N, clip=True)
     im = ax.imshow(data, origin="upper", cmap=cmap, norm=norm, aspect="equal")
     ticks = [1.1, 1.25, 1.35, 1.45, 1.55, 1.8, 2.25, 2.75, 3.5, 4.5, 5.75, 7.25, 9.0, 10.0]
     tick_labels = [
