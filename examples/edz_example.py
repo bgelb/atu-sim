@@ -15,7 +15,7 @@ from atu_sim.hardware import atu10_bank
 from atu_sim.lc_bank import LCBank, ShuntPosition
 from atu_sim.plotting import fmt_swr, new_plot, overlay_trace, plot_vswr_map, save_plot
 from atu_sim.simulator import ATUSimulator
-from atu_sim.tuning_algos.atu10_reference import ATU10ReferenceAlgo
+from atu_sim.tuning_algos.atu10_reference import ATU10ReferenceAlgo, ATU10Options
 from atu_sim.tuning_algos.bg_algo import BGAlgo
 from atu_sim.tuning_algos.types import Topology
 
@@ -25,7 +25,7 @@ def _build_algo(name: str, bank, detector):
     if name_l == "bg":
         return BGAlgo(bank, detector)
     if name_l == "atu10":
-        return ATU10ReferenceAlgo(bank, detector)
+        return ATU10ReferenceAlgo(bank, detector, options=ATU10Options(force_all_coarse_strategies=True))
     raise ValueError(f"Unknown algorithm {name}")
 
 
