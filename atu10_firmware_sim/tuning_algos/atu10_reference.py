@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..detectors import Detector
+from ..detectors import ATU10IntegerVSWRDetector, Detector
 from ..lc_bank import LCBank, ShuntPosition
 from .types import AlgoResult, AlgoTrace, Topology, TuningAlgo, TuningConfig
 
@@ -26,6 +26,8 @@ class ATU10ReferenceAlgo(TuningAlgo):
     ) -> None:
         if len(bank.l_values) != 7 or len(bank.c_values) != 7:
             raise AssertionError("ATU10ReferenceAlgo expects 7 L relays and 7 C relays")
+        if not isinstance(detector, ATU10IntegerVSWRDetector):
+            raise TypeError("ATU10ReferenceAlgo requires ATU10IntegerVSWRDetector")
         self.bank = bank
         self.detector = detector
         self.options = options or ATU10Options()

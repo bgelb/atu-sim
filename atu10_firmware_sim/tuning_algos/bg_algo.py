@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..detectors import Detector
+from ..detectors import ATU10IntegerVSWRDetector, Detector
 from ..lc_bank import LCBank, ShuntPosition
 from .types import AlgoResult, AlgoTrace, Topology, TuningAlgo, TuningConfig
 
@@ -24,6 +24,8 @@ class BGAlgo(TuningAlgo):
     ) -> None:
         if len(bank.l_values) != 7 or len(bank.c_values) != 7:
             raise AssertionError("BGAlgo expects 7 L relays and 7 C relays")
+        if not isinstance(detector, ATU10IntegerVSWRDetector):
+            raise TypeError("BGAlgo requires ATU10IntegerVSWRDetector")
         self.bank = bank
         self.detector = detector
         self.options = options or BGOptions()

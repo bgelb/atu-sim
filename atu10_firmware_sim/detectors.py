@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+from typing import Any
 
 
 class Detector:
     """Interface for detectors converting impedance to a feedback metric."""
 
-    def measure(self, z_in: complex) -> int:  # pragma: no cover - interface
+    def measure(self, z_in: complex) -> Any:  # pragma: no cover - interface
         raise NotImplementedError
 
 
