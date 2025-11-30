@@ -12,6 +12,8 @@ from atu10_firmware_sim.detectors import ATU10IntegerVSWRDetector
 from atu10_firmware_sim.hardware import atu10_bank
 from atu10_firmware_sim.lc_bank import LCBank, ShuntPosition
 from atu10_firmware_sim.simulator import ATUSimulator
+from atu10_firmware_sim.tuning_algos.atu10_reference import ATU10ReferenceAlgo
+from atu10_firmware_sim.tuning_algos.bg_algo import BGAlgo
 from atu10_firmware_sim.tuning_algos.types import Topology
 
 
@@ -366,6 +368,15 @@ def topo_label(topo: Topology, c_val: float) -> str:
     return f"{shunt}@{'load' if topo == Topology.SHUNT_AT_LOAD else 'input'}"
 
 
+def _build_algo(name: str, bank: LCBank, detector: ATU10IntegerVSWRDetector):
+    name_l = name.lower()
+    if name_l == "bg":
+        return BGAlgo(bank, detector)
+    if name_l == "atu10":
+        return ATU10ReferenceAlgo(bank, detector)
+    raise ValueError(f"Unknown algorithm {name}")
+
+
 def run_table(table, title: str, algo: str, bank: LCBank, detector: ATU10IntegerVSWRDetector) -> None:
     print()
     print("=" * 70)
@@ -386,7 +397,7 @@ def run_table(table, title: str, algo: str, bank: LCBank, detector: ATU10Integer
     print("-" * (freq_width + 3 + load_width + 3 + ideal_width + 2 + best_width + 2 + algo_width))
 
     for label, freq, zL in table:
-        sim = ATUSimulator(bank=bank, detector=detector, algorithm=algo)
+        sim = ATUSimulator(algorithm=_build_algo(algo, bank, detector))
         result = sim.tune(freq, zL)
 
         ideal = find_ideal_match(freq, zL, 50.0, detector)
@@ -466,7 +477,7 @@ def main() -> None:
     out_dir = args.output_dir
     print("Generating SWR grid PNGs for all table entries...")
     for label, freq, zL in TABLE1 + TABLE3:
-        sim = ATUSimulator(bank=bank, detector=detector, algorithm=args.algorithm)
+        sim = ATUSimulator(algorithm=_build_algo(args.algorithm, bank, detector))
         result = sim.tune(freq, zL)
         grids = swr_grid(bank, detector, freq, zL)
         trace_dicts = [
