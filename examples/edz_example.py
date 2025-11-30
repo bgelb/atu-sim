@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from atu_sim.cebik_tables import TABLE1, TABLE3
+from atu_sim.cebik_tables import TABLE3
 from atu_sim.detectors import ATU10IntegerVSWRDetector
 from atu_sim.hardware import atu10_bank
 from atu_sim.lc_bank import LCBank, ShuntPosition
@@ -100,47 +100,41 @@ def main() -> None:
         action="store_true",
         help="Skip generating SWR grid PNGs.",
     )
-    parser.add_argument(
-        "--algorithm",
-        choices=["bg", "atu10"],
-        default="bg",
-        help="Tuning algorithm to use (default: bg).",
-    )
     args = parser.parse_args()
 
     bank = atu10_bank()
     detector = ATU10IntegerVSWRDetector()
 
-    run_table(TABLE1, "Cebik Table 1 - Free-space 88' doublet", args.algorithm, bank, detector)
-    run_table(TABLE3, "Cebik Table 3 - 70 ft high 88' doublet", args.algorithm, bank, detector)
+    for algo_name in ("atu10", "bg"):
+        run_table(TABLE3, f"Cebik Table 3 - 70 ft high 88' doublet ({algo_name})", algo_name, bank, detector)
 
-    if args.skip_plots:
-        return
+        if args.skip_plots:
+            continue
 
-    out_dir = args.output_dir
-    print("Generating SWR grid PNGs for all table entries...")
-    for label, freq, zL in TABLE1 + TABLE3:
-        algo = _build_algo(args.algorithm, bank, detector)
-        sim = ATUSimulator(algorithm=algo)
-        result = sim.tune(freq, zL)
-        grids = {
-            0: bank.get_swr_map(freq, zL, ShuntPosition.LOAD),
-            1: bank.get_swr_map(freq, zL, ShuntPosition.SOURCE),
-        }
-        trace = result.trace
-        final_state = (result.final_config.c_bits, result.final_config.l_bits)
-        for sw in (0, 1):
-            fig, ax = new_plot(label, sw)
-            plot_vswr_map(ax, grids[sw])
-            final_for_sw = (
-                final_state
-                if (sw == 0 and result.final_config.topology == Topology.SHUNT_AT_LOAD)
-                or (sw == 1 and result.final_config.topology == Topology.SHUNT_AT_SOURCE)
-                else None
-            )
-            overlay_trace(ax, trace, sw=sw, final_state=final_for_sw)
-            out_path = out_dir / f"swr_map_{label.replace(' ', '_')}_sw{sw}.png"
-            save_plot(fig, out_path)
+        out_dir = args.output_dir / algo_name
+        print(f"Generating SWR grid PNGs for {algo_name}...")
+        for label, freq, zL in TABLE3:
+            algo = _build_algo(algo_name, bank, detector)
+            sim = ATUSimulator(algorithm=algo)
+            result = sim.tune(freq, zL)
+            grids = {
+                0: bank.get_swr_map(freq, zL, ShuntPosition.LOAD),
+                1: bank.get_swr_map(freq, zL, ShuntPosition.SOURCE),
+            }
+            trace = result.trace
+            final_state = (result.final_config.c_bits, result.final_config.l_bits)
+            for sw in (0, 1):
+                fig, ax = new_plot(label, sw)
+                plot_vswr_map(ax, grids[sw])
+                final_for_sw = (
+                    final_state
+                    if (sw == 0 and result.final_config.topology == Topology.SHUNT_AT_LOAD)
+                    or (sw == 1 and result.final_config.topology == Topology.SHUNT_AT_SOURCE)
+                    else None
+                )
+                overlay_trace(ax, trace, sw=sw, final_state=final_for_sw)
+                out_path = out_dir / f"swr_map_{label.replace(' ', '_')}_sw{sw}.png"
+                save_plot(fig, out_path)
 
 
 if __name__ == "__main__":
