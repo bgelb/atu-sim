@@ -4,8 +4,6 @@ from dataclasses import dataclass
 
 from .detectors import Detector
 from .lc_bank import LCBank
-from .tuning_algos.atu10_reference import ATU10ReferenceAlgo
-from .tuning_algos.bg_algo import BGAlgo
 from .tuning_algos.types import AlgoResult, TuningAlgo, TuningConfig, Topology
 
 
@@ -48,8 +46,12 @@ class ATUSimulator:
         if isinstance(algorithm, str):
             algo_l = algorithm.lower()
             if algo_l == "bg":
+                from .tuning_algos.bg_algo import BGAlgo
+
                 self.algo: TuningAlgo = BGAlgo(bank, detector)
             elif algo_l == "atu10":
+                from .tuning_algos.atu10_reference import ATU10ReferenceAlgo
+
                 self.algo = ATU10ReferenceAlgo(bank, detector)
             else:
                 raise ValueError(f"Unknown algorithm {algorithm}")
