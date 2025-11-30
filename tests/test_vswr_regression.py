@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from atu_sim.cebik_tables import TABLE1, TABLE3
-from atu_sim.hardware import atu10_bank
+from atu_sim.hardware import atu10_bank_alt
 from atu_sim.detectors import ATU10IntegerVSWRDetector
 from atu_sim.simulator import ATUSimulator
 from atu_sim.tuning_algos.atu10_reference import ATU10ReferenceAlgo
@@ -47,7 +47,7 @@ EXPECTED = {
 
 def run_table(table, algo: str) -> dict[str, int]:
     swrs: dict[str, int] = {}
-    bank = atu10_bank()
+    bank = atu10_bank_alt()
     detector = ATU10IntegerVSWRDetector()
     AlgoCls = BGAlgo if algo == "bg" else ATU10ReferenceAlgo
     for label, freq, z_load in table:
