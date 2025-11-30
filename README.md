@@ -31,6 +31,22 @@ The example prints both Cebik tables using the default BG algorithm, then emits
 SWR grid PNGs for every table entry (both SW topologies) into `./plots` by
 default with the tuning path overlaid.
 
+To run the simulator directly in code, construct the pieces explicitly:
+
+```python
+from atu_sim.hardware import atu10_bank
+from atu_sim.detectors import ATU10IntegerVSWRDetector
+from atu_sim.tuning_algos.bg_algo import BGAlgo
+from atu_sim.simulator import ATUSimulator
+
+bank = atu10_bank()
+detector = ATU10IntegerVSWRDetector()
+algo = BGAlgo(bank, detector)
+sim = ATUSimulator(algorithm=algo)
+result = sim.tune(7.0e6, complex(185, 510))
+print(result.final_swr)
+```
+
 CLI toggles (see `-h` for the full list):
 
 ```bash
@@ -57,8 +73,9 @@ Core pieces for a general relay-switched L-network tuner:
   (e.g., `ATU10IntegerVSWRDetector` with the ATU-10 integer SWR quantizer).
 - `TuningAlgo` implementations (`tuning_algos/bg_algo.py`, `tuning_algos/atu10_reference.py`):
   pluggable tuning strategies wrapping the firmware-like state machine.
-- `ATUSimulator`: orchestrates bank + detector + tuning algorithm and emits a trace
-  of each relay state with computed impedance/SWR/detector output.
+- `ATUSimulator`: orchestrates a `TuningAlgo` instance and emits a trace of each
+  relay state with computed impedance/SWR/detector output.
+- `plotting.py`: shared helpers to render VSWR maps and overlay simulator traces.
 - `examples/edz_example.py`: evaluates the simulator on Cebik tables and renders
   SWR heatmaps with the tuning path overlaid.
 
@@ -69,5 +86,5 @@ each topology (SW=0 and SW=1), covering every inductor/capacitor bitmask
 combination. The example prints these as PNG heatmaps for every table entry.
 Rows are inductor bitmasks, columns are capacitor bitmasks; color buckets
 correspond to <1.2, <1.3, <1.4, <1.5, <1.7, <2, <2.5, <3, <4, <5, <6.5, <8,
-<9.5, and ≥9.5 SWR (light gray). The tuning path (coarse vs. sharp steps) is
+<9.5, and ≥9.5 SWR (light gray). The tuning path (coarse vs. fine steps) is
 overlaid on each plot.
