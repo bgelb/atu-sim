@@ -90,12 +90,89 @@ def overlay_trace(ax, trace: Iterable, sw: int, final_state: tuple[int, int] | N
     if not trace_sw and final_state is None:
         return
 
-    # Basic path overlay
-    if trace_sw:
-        xs = [t.c_bits for t in trace_sw]
-        ys = [t.l_bits for t in trace_sw]
-        ax.plot(xs, ys, color="white", linewidth=1.0, alpha=0.8, marker="o", markersize=3)
-        ax.scatter(xs[:1], ys[:1], marker="s", color="cyan", edgecolors="black", s=30, label="start", alpha=0.9)
+    start_pts = []
+    coarse_pts = []
+    sharp_pts = []
+    coarse_best = None
+    per_secondary: list[tuple[int, int]] = []
+
+    for t in trace_sw:
+        phase = getattr(t, "phase", "")
+        point = (t.c_bits, t.l_bits)
+        if phase in ("reset", "tune_start", "bg_start", "coarse_tune_start", "subtune_reset"):
+            start_pts.append(point)
+        if "coarse" in phase:
+            coarse_pts.append(point)
+            if phase == "bg_coarse_best":
+                coarse_best = point
+        elif "bg_sec_best" in phase:
+            per_secondary.append(point)
+        else:
+            sharp_pts.append(point)
+
+    if coarse_pts:
+        ax.scatter(
+            [p[0] for p in coarse_pts],
+            [p[1] for p in coarse_pts],
+            marker="^",
+            color="black",
+            s=14,
+            label="coarse steps",
+            alpha=0.8,
+        )
+    if coarse_best:
+        ax.scatter(
+            coarse_best[0],
+            coarse_best[1],
+            marker="^",
+            color="gold",
+            edgecolors="black",
+            s=40,
+            label="best coarse",
+            zorder=5,
+        )
+    if per_secondary:
+        ax.scatter(
+            [p[0] for p in per_secondary],
+            [p[1] for p in per_secondary],
+            marker="D",
+            color="#ff69b4",
+            edgecolors="black",
+            s=26,
+            label="best per secondary",
+            alpha=0.9,
+            zorder=5,
+        )
+    if start_pts:
+        ax.scatter(
+            [p[0] for p in start_pts],
+            [p[1] for p in start_pts],
+            marker="s",
+            color="cyan",
+            edgecolors="black",
+            s=20,
+            label="start/reset",
+            alpha=0.8,
+        )
+
+    if sharp_pts:
+        ax.scatter(
+            [p[0] for p in sharp_pts],
+            [p[1] for p in sharp_pts],
+            marker="o",
+            color="white",
+            edgecolors="black",
+            s=18,
+            label="sharp steps",
+            alpha=0.9,
+        )
+        for (x0, y0), (x1, y1) in zip(sharp_pts[:-1], sharp_pts[1:]):
+            ax.annotate(
+                "",
+                xy=(x1, y1),
+                xytext=(x0, y0),
+                arrowprops=dict(arrowstyle="->", color="black", lw=0.8),
+            )
 
     if final_state:
         ax.scatter(
@@ -108,7 +185,7 @@ def overlay_trace(ax, trace: Iterable, sw: int, final_state: tuple[int, int] | N
             label="final",
             zorder=6,
         )
-    if trace_sw or final_state:
+    if coarse_pts or sharp_pts or start_pts or per_secondary or final_state or coarse_best:
         ax.legend(loc="upper right")
 
 
